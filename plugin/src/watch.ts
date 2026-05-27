@@ -23,7 +23,10 @@ export function extractMessages(line: string): string[] {
     if (typeof block !== 'object' || block === null) continue
     const b = block as Record<string, unknown>
     if (b.type === 'thinking' && typeof b.thinking === 'string') {
-      // thinkingGist が空文字(空入力)を返す場合は追加しない
+      // 注: 現環境では thinking が署名付きで transcript に本文が記録されず
+      // thinking が空文字になるため、ここは実質 no-op となる(2026-05-27 検証で判明)。
+      // 将来 Claude Code が thinking 本文を記録する版に備えてコードは残す。
+      // thinkingGist が空文字(空入力)を返す場合は追加しない。
       const gist = thinkingGist(b.thinking)
       if (gist) results.push(gist)
     } else if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {

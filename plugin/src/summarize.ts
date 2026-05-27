@@ -1,20 +1,21 @@
 import { basename } from 'path'
 
-// 本文を 1 行ならインラインコード、複数行ならコードブロックで囲む。
+// 絵文字を含む全体を 1 行ならインラインコード、複数行ならコードブロックで囲む。
 function code(body: string): string {
-  return body.includes('\n') ? `\n\`\`\`\n${body}\n\`\`\`` : `\`${body}\``
+  return body.includes('\n') ? `\`\`\`\n${body}\n\`\`\`` : `\`${body}\``
 }
 
-// tool_input から代表的な引数を1つ選び、ツール名と本文をまとめてコード整形する。
-// 1行ならインライン(🔧 `Edit watch.ts`)、複数行ならコードブロックにする。bash の内容は省略しない。
+// tool_input から代表的な引数を1つ選び、絵文字とツール名と本文をまとめてコード整形する。
+// file_path/pattern は1行(`🔧 Edit watch.ts`)、bash はツール名と本文の間で改行しコードブロックにする。
+// bash の内容は省略しない。
 export function toolSummary(name: string, input: Record<string, unknown>): string {
   const fp = input.file_path ?? input.path ?? input.notebook_path
-  if (typeof fp === 'string') return `🔧 ${code(`${name} ${basename(fp.replace(/\\/g, '/'))}`)}`
+  if (typeof fp === 'string') return code(`🔧 ${name} ${basename(fp.replace(/\\/g, '/'))}`)
   const cmd = input.command
-  if (typeof cmd === 'string') return `🔧 ${code(`${name}: ${cmd}`)}`
+  if (typeof cmd === 'string') return code(`🔧 ${name}\n${cmd}`)
   const pat = input.pattern
-  if (typeof pat === 'string') return `🔧 ${code(`${name}: ${pat}`)}`
-  return `🔧 ${code(name)}`
+  if (typeof pat === 'string') return code(`🔧 ${name}: ${pat}`)
+  return code(`🔧 ${name}`)
 }
 
 // thinking の先頭1〜2文を要点として抽出(最大200字)。

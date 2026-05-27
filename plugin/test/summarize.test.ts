@@ -1,17 +1,22 @@
 import { test, expect } from 'bun:test'
 import { toolSummary, thinkingGist } from '../src/summarize'
 
-test('toolSummary は1行の本文をインラインコードで表示する', () => {
-  expect(toolSummary('Read', { file_path: 'C:/x/server.ts' })).toBe('🔧 Read `server.ts`')
-  expect(toolSummary('Bash', { command: 'bun test' })).toBe('🔧 Bash: `bun test`')
+test('toolSummary はツール名と本文をまとめてインラインコードにする', () => {
+  expect(toolSummary('Read', { file_path: 'C:/x/server.ts' })).toBe('🔧 `Read server.ts`')
+  expect(toolSummary('Bash', { command: 'bun test' })).toBe('🔧 `Bash: bun test`')
 })
 
-test('toolSummary は複数行の本文をコードブロックで表示する', () => {
-  expect(toolSummary('Bash', { command: 'cd foo\nbun test' })).toBe('🔧 Bash: \n```\ncd foo\nbun test\n```')
+test('toolSummary は複数行の本文をコードブロックにする', () => {
+  expect(toolSummary('Bash', { command: 'cd foo\nbun test' })).toBe('🔧 \n```\nBash: cd foo\nbun test\n```')
+})
+
+test('toolSummary は bash の内容を省略しない', () => {
+  const long = 'echo ' + 'x'.repeat(200)
+  expect(toolSummary('Bash', { command: long })).toBe('🔧 `Bash: ' + long + '`')
 })
 
 test('toolSummary は引数が無ければツール名のみにする', () => {
-  expect(toolSummary('Glob', {})).toBe('🔧 Glob')
+  expect(toolSummary('Glob', {})).toBe('🔧 `Glob`')
 })
 
 test('thinkingGist は先頭1-2文を要点として返す', () => {

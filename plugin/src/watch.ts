@@ -1,6 +1,8 @@
 import { thinkingGist } from './summarize'
-import { enqueue, channelId } from './notify'
-import { statSync, openSync, readSync, closeSync, existsSync } from 'fs'
+import { enqueue, channelId, ownerName } from './notify'
+import { stateDir } from './routes'
+import { statSync, openSync, readSync, closeSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
+import { join } from 'path'
 
 // JSONL の1行から転送すべきメッセージ配列を返す純粋関数
 // 空行・parse 失敗・非 assistant 行・content が配列でない場合は空配列を返す
@@ -71,9 +73,26 @@ if (import.meta.main) {
     }
   }
 
+  // PID ファイルで孤児プロセスを掃除する
+  // 同じオーナーの前回 watch が残っていれば SIGTERM で終了させ、自分の PID を書き込む
+  const pidFile = join(stateDir(), 'watch-' + ownerName() + '.pid')
+  try {
+    if (existsSync(pidFile)) {
+      const oldPid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10)
+      if (!isNaN(oldPid) && oldPid !== process.pid) {
+        try { process.kill(oldPid, 'SIGTERM') } catch { /* 既に終了済み or 権限なしは無視する */ }
+      }
+    }
+  } catch { /* PID ファイル読み取りエラーは無視する */ }
+  try { writeFileSync(pidFile, String(process.pid), { encoding: 'utf8', mode: 0o600 }) } catch { /* 書き込み失敗は無視する */ }
+
   const interval = setInterval(poll, 1000)
-  // watch 常駐でも本体プロセスを待機させない
-  interval.unref?.()
-  process.on('SIGTERM', () => { clearInterval(interval); process.exit(0) })
-  process.stdin.on('close', () => { clearInterval(interval); process.exit(0) })
+  // interval.unref() を呼ばない — イベントループを保持して常駐する
+  process.on('SIGTERM', () => {
+    clearInterval(interval)
+    try { unlinkSync(pidFile) } catch { /* 削除失敗は無視する */ }
+    process.exit(0)
+  })
+  // process.stdin.on('close', ...) は削除する
+  // stdio:'ignore' で stdin が即 close するため、残すと起動直後に即終了してしまう
 }

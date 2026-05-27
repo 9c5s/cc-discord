@@ -12,8 +12,9 @@ export function routesDir(): string {
 }
 
 export function writeRoute(normName: string, channelId: string): void {
-  mkdirSync(routesDir(), { recursive: true })
-  writeFileSync(join(routesDir(), normName), channelId, 'utf8')
+  const dir = routesDir()
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, normName), channelId, 'utf8')
 }
 
 export function readRoute(normName: string): string | null {

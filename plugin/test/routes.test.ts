@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test'
-import { writeRoute, readRoute, routesDir } from './routes'
+import { writeRoute, readRoute, routesDir } from '../src/routes'
 import { rmSync, existsSync } from 'fs'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
@@ -23,11 +23,11 @@ afterEach(() => {
   delete process.env.DISCORD_STATE_DIR
 })
 
-test('write then read returns channel id', () => {
+test('書き込んだ値を読み出せる', () => {
   writeRoute('cc-discord', '123456789')
   expect(readRoute('cc-discord')).toBe('123456789')
 })
 
-test('read missing returns null', () => {
+test('存在しないキーは null を返す', () => {
   expect(readRoute('nope')).toBeNull()
 })

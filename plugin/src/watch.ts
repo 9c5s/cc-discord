@@ -48,13 +48,18 @@ if (import.meta.main) {
     try {
       if (!existsSync(transcriptPath)) return
       const size = statSync(transcriptPath).size
-      if (size <= offset) return
+      if (size < offset) { offset = 0; carry = '' } // ローテーション/truncate を検出しリセット
+      if (size === offset) return
       const fd = openSync(transcriptPath, 'r')
-      const buf = Buffer.alloc(size - offset)
-      readSync(fd, buf, 0, buf.length, offset)
-      closeSync(fd)
-      offset = size
-      carry += buf.toString('utf8')
+      try {
+        const buf = Buffer.alloc(size - offset)
+        readSync(fd, buf, 0, buf.length, offset)
+        offset = size
+        carry += buf.toString('utf8')
+      } finally {
+        // readSync が throw しても fd を確実に閉じてリークを防ぐ
+        closeSync(fd)
+      }
       const lines = carry.split('\n')
       carry = lines.pop() ?? '' // 未完行は次回へ持ち越す
       for (const line of lines) {

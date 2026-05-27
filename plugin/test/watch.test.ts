@@ -29,3 +29,12 @@ test('空の thinking は除外する', () => {
 test('不正な JSON 行はスキップする', () => {
   expect(extractMessages('not json')).toEqual([])
 })
+
+test('複数ブロックを順に抽出する', () => {
+  const line = '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"まず確認する。次に実装する。"},{"type":"text","text":"実装が完了しました。"}]}}'
+  expect(extractMessages(line)).toEqual(['🧠 まず確認する。次に実装する。', '💬 実装が完了しました。'])
+})
+
+test('空行はスキップする', () => {
+  expect(extractMessages('')).toEqual([])
+})

@@ -1,17 +1,11 @@
-import { homedir } from 'os'
 import { join } from 'path'
 import { readFileSync, existsSync } from 'fs'
 import { normalizeName } from './normalize'
-import { readRoute } from './routes'
+import { readRoute, stateDir } from './routes'
 
 const API = 'https://discord.com/api/v10'
 // @silent フラグ: Discord の SUPPRESS_NOTIFICATIONS (ビット12)
 const SUPPRESS_NOTIFICATIONS = 1 << 12 // 4096
-
-// ステートディレクトリは DISCORD_STATE_DIR 環境変数 or デフォルトパス
-function stateDir(): string {
-  return process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'discord')
-}
 
 // ボットトークンは環境変数を優先し、なければ .env ファイルから読む
 function token(): string | null {
@@ -19,7 +13,8 @@ function token(): string | null {
   const envf = join(stateDir(), '.env')
   if (!existsSync(envf)) return null
   const m = readFileSync(envf, 'utf8').match(/^DISCORD_BOT_TOKEN=(.*)$/m)
-  return m ? m[1].trim() : null
+  // 値が引用符で囲まれている場合は除去する
+  return m ? m[1].trim().replace(/^["']|["']$/g, '') : null
 }
 
 // CLAUDE_PROJECT_DIR のベース名を正規化した所有者名を返す
@@ -46,7 +41,10 @@ async function postMessage(text: string): Promise<void> {
     method: 'POST',
     headers: { Authorization: `Bot ${t}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ content: text.slice(0, 1900), flags: SUPPRESS_NOTIFICATIONS }),
-  }).catch(() => {})
+  }).catch((e: unknown) => {
+    // 本番は無音だが DISCORD_NOTIFY_DEBUG 指定時のみ stderr に出す
+    if (process.env.DISCORD_NOTIFY_DEBUG) process.stderr.write(`[notify] fetch failed: ${e}\n`)
+  })
 }
 
 // hook(単発)用 -- 即時送信
@@ -68,9 +66,9 @@ export function enqueue(line: string): void {
 }
 
 // バッファを結合して1メッセージとして送信する
-async function flush(): Promise<void> {
+function flush(): void {
   timer = null
   if (buffer.length === 0) return
   const chunk = buffer.splice(0, buffer.length).join('\n')
-  await postMessage(chunk)
+  void postMessage(chunk)
 }

@@ -1,15 +1,20 @@
 import { basename } from 'path'
 
-// tool_input から代表的な引数を1つ選んで1行に。
-// 区切り文字で引数の種別を表現する。file_path 系はファイル名なのでスペース区切り(Read server.ts)、
-// command/pattern は実行内容なのでコロン区切り(Bash: bun test)とする。
+// 本文を 1 行ならインラインコード、複数行ならコードブロックで囲む。
+function code(body: string): string {
+  return body.includes('\n') ? `\n\`\`\`\n${body}\n\`\`\`` : `\`${body}\``
+}
+
+// tool_input から代表的な引数を1つ選び、本文をコード整形して1行サマリにする。
+// file_path 系はファイル名(Read `server.ts`)、command/pattern は実行内容(Bash: `bun test`)。
+// 本文が複数行になる場合のみコードブロックを使う。
 export function toolSummary(name: string, input: Record<string, unknown>): string {
   const fp = input.file_path ?? input.path ?? input.notebook_path
-  if (typeof fp === 'string') return `🔧 ${name} ${basename(fp.replace(/\\/g, '/'))}`
+  if (typeof fp === 'string') return `🔧 ${name} ${code(basename(fp.replace(/\\/g, '/')))}`
   const cmd = input.command
-  if (typeof cmd === 'string') return `🔧 ${name}: ${cmd.slice(0, 80)}`
+  if (typeof cmd === 'string') return `🔧 ${name}: ${code(cmd.slice(0, 80))}`
   const pat = input.pattern
-  if (typeof pat === 'string') return `🔧 ${name}: ${pat.slice(0, 80)}`
+  if (typeof pat === 'string') return `🔧 ${name}: ${code(pat.slice(0, 80))}`
   return `🔧 ${name}`
 }
 

@@ -1,9 +1,13 @@
 import { test, expect } from 'bun:test'
 import { toolSummary, thinkingGist } from '../src/summarize'
 
-test('toolSummary はツール名と主要な引数を表示する', () => {
-  expect(toolSummary('Read', { file_path: 'C:/x/server.ts' })).toBe('🔧 Read server.ts')
-  expect(toolSummary('Bash', { command: 'bun test' })).toBe('🔧 Bash: bun test')
+test('toolSummary は1行の本文をインラインコードで表示する', () => {
+  expect(toolSummary('Read', { file_path: 'C:/x/server.ts' })).toBe('🔧 Read `server.ts`')
+  expect(toolSummary('Bash', { command: 'bun test' })).toBe('🔧 Bash: `bun test`')
+})
+
+test('toolSummary は複数行の本文をコードブロックで表示する', () => {
+  expect(toolSummary('Bash', { command: 'cd foo\nbun test' })).toBe('🔧 Bash: \n```\ncd foo\nbun test\n```')
 })
 
 test('toolSummary は引数が無ければツール名のみにする', () => {

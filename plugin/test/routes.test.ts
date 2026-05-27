@@ -31,3 +31,12 @@ test('書き込んだ値を読み出せる', () => {
 test('存在しないキーは null を返す', () => {
   expect(readRoute('nope')).toBeNull()
 })
+
+test('routesDir は stateDir/routes を返す', () => {
+  expect(routesDir()).toBe(join(process.env.DISCORD_STATE_DIR!, 'routes'))
+})
+
+test('空白のみの値は null を返す', () => {
+  writeRoute('blank', '   ')
+  expect(readRoute('blank')).toBeNull()
+})

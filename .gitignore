@@ -1,0 +1,14 @@
+# 依存パッケージ
+node_modules/
+
+# TypeScript ビルド成果物
+*.tsbuildinfo
+
+# 一時ファイル
+.tmp/
+*.log
+
+# OS 生成ファイル
+.DS_Store
+Thumbs.db
+desktop.ini

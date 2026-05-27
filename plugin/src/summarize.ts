@@ -5,17 +5,16 @@ function code(body: string): string {
   return body.includes('\n') ? `\n\`\`\`\n${body}\n\`\`\`` : `\`${body}\``
 }
 
-// tool_input から代表的な引数を1つ選び、本文をコード整形して1行サマリにする。
-// file_path 系はファイル名(Read `server.ts`)、command/pattern は実行内容(Bash: `bun test`)。
-// 本文が複数行になる場合のみコードブロックを使う。
+// tool_input から代表的な引数を1つ選び、ツール名と本文をまとめてコード整形する。
+// 1行ならインライン(🔧 `Edit watch.ts`)、複数行ならコードブロックにする。bash の内容は省略しない。
 export function toolSummary(name: string, input: Record<string, unknown>): string {
   const fp = input.file_path ?? input.path ?? input.notebook_path
-  if (typeof fp === 'string') return `🔧 ${name} ${code(basename(fp.replace(/\\/g, '/')))}`
+  if (typeof fp === 'string') return `🔧 ${code(`${name} ${basename(fp.replace(/\\/g, '/'))}`)}`
   const cmd = input.command
-  if (typeof cmd === 'string') return `🔧 ${name}: ${code(cmd.slice(0, 80))}`
+  if (typeof cmd === 'string') return `🔧 ${code(`${name}: ${cmd}`)}`
   const pat = input.pattern
-  if (typeof pat === 'string') return `🔧 ${name}: ${code(pat.slice(0, 80))}`
-  return `🔧 ${name}`
+  if (typeof pat === 'string') return `🔧 ${code(`${name}: ${pat}`)}`
+  return `🔧 ${code(name)}`
 }
 
 // thinking の先頭1〜2文を要点として抽出(最大200字)。

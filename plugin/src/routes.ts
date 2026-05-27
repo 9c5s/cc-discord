@@ -3,7 +3,7 @@ import { join } from 'path'
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs'
 
 // server.ts と同じ STATE_DIR 規約。DISCORD_STATE_DIR があればそれを優先。
-function stateDir(): string {
+export function stateDir(): string {
   return process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'discord')
 }
 

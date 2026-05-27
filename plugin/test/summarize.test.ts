@@ -10,8 +10,17 @@ test('toolSummary は引数が無ければツール名のみにする', () => {
   expect(toolSummary('Glob', {})).toBe('🔧 Glob')
 })
 
-test('thinkingGist は先頭1-2文を要点として上限内に収める', () => {
-  const g = thinkingGist('まず確認する。次に実装する。最後にテスト。')
+test('thinkingGist は先頭1-2文を要点として返す', () => {
+  expect(thinkingGist('まず確認する。次に実装する。最後にテスト。')).toBe('🧠 まず確認する。次に実装する。')
+})
+
+test('thinkingGist は空入力で空文字を返す', () => {
+  expect(thinkingGist('')).toBe('')
+})
+
+test('thinkingGist は長文を上限内に収める', () => {
+  const g = thinkingGist('あ'.repeat(300))
   expect(g.startsWith('🧠 ')).toBe(true)
+  expect(g.endsWith('…')).toBe(true)
   expect(g.length).toBeLessThanOrEqual(200)
 })

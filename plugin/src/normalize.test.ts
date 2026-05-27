@@ -16,3 +16,7 @@ test('collapses repeated hyphens and trims', () => {
   expect(normalizeName('  a  b  ')).toBe('a-b')
   expect(normalizeName('a--b')).toBe('a-b')
 })
+test('empty or symbol-only input returns empty string', () => {
+  expect(normalizeName('')).toBe('')
+  expect(normalizeName('!!!')).toBe('')
+})

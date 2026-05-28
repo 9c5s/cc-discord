@@ -22,6 +22,11 @@ test('toolSummary は引数が無ければツール名のみにする', () => {
   expect(toolSummary('Glob', {})).toBe('`🔧 Glob`')
 })
 
+test('toolSummary は hideBody が true なら本文を出さずツール名のみにする', () => {
+  expect(toolSummary('Bash', { command: 'bun test' }, true)).toBe('`🔧 Bash`')
+  expect(toolSummary('Read', { file_path: 'x/server.ts' }, true)).toBe('`🔧 Read`')
+})
+
 test('thinkingGist は先頭1-2文を要点として返す', () => {
   expect(thinkingGist('まず確認する。次に実装する。最後にテスト。')).toBe('🧠 まず確認する。次に実装する。')
 })

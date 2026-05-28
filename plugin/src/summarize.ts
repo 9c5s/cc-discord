@@ -7,8 +7,9 @@ function code(body: string): string {
 
 // tool_input から代表的な引数を1つ選び、絵文字とツール名と本文をまとめてコード整形する。
 // file_path/pattern は1行(`🔧 Edit watch.ts`)、bash はツール名と本文の間で改行しコードブロックにする。
-// bash の内容は省略しない。
-export function toolSummary(name: string, input: Record<string, unknown>): string {
+// bash の内容は省略しない。hideBody が true なら本文を出さずツール名のみにする。
+export function toolSummary(name: string, input: Record<string, unknown>, hideBody = false): string {
+  if (hideBody) return code(`🔧 ${name}`)
   const fp = input.file_path ?? input.path ?? input.notebook_path
   if (typeof fp === 'string') return code(`🔧 ${name} ${basename(fp.replace(/\\/g, '/'))}`)
   const cmd = input.command

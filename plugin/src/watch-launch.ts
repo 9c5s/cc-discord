@@ -9,6 +9,7 @@ if (tp) {
   // watch.ts は同じ src ディレクトリにある。import.meta.dir で解決する(Windows でも確実)。
   const watch = join(import.meta.dir, 'watch.ts')
   // process.execPath は現在の bun バイナリのフルパス。Windows で bun の PATH 解決に依存せず確実。
-  const child = spawn(process.execPath, [watch, tp], { detached: true, stdio: 'ignore', env: process.env })
+  // windowsHide はセッション開始時に子プロセスのコンソール窓が一瞬出るのを抑止する(Windows 限定で有効)。
+  const child = spawn(process.execPath, [watch, tp], { detached: true, stdio: 'ignore', env: process.env, windowsHide: true })
   child.unref()
 }

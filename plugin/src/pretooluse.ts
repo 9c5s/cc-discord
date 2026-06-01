@@ -18,5 +18,5 @@ async function main() {
 }
 
 main().catch((e: unknown) => {
-  if (process.env.DISCORD_NOTIFY_DEBUG) process.stderr.write(`[posttooluse] ${e}\n`)
+  if (process.env.DISCORD_NOTIFY_DEBUG) process.stderr.write(`[pretooluse] ${e}\n`)
 })

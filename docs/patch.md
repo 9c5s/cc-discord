@@ -252,3 +252,82 @@ client.once('ready', async c => {
 ### 関連
 
 - メモリ: `cc-discord-channel-enhancements-plan` (本改変の設計計画を参照している)
+
+---
+
+## パッチ C: 進捗ストリーミング用 per-inbound スレッド作成
+
+### 背景・目的
+
+途中経過 (tool 通知、thinking、text) を親チャンネルに直接流すと会話本筋に埋もれる。
+inbound メッセージ毎に新規スレッドを立てて、Claude の途中経過はそのスレッド内に蓄積する。
+最終的な `reply` ツール経由の返信は引き続き親チャンネル (または DM) に投稿される。
+
+### 変更箇所
+
+`messageCreate` ハンドラ内、`startTyping(msg.channel)` の直後に挿入 (現 line 933 付近):
+
+```typescript
+  // --- Per-inbound progress thread (Patch C) ---
+  // 各 inbound で進捗用スレッドを立て、tool/text の途中経過をそこへ流す。
+  // DM はスレッド作成不可なので channel ID をそのまま書き、notify は DM に直接投稿する。
+  if (OWNER_NAME) {
+    const ptDir = join(STATE_DIR, 'progress-thread')
+    try { mkdirSync(ptDir, { recursive: true, mode: 0o700 }) } catch { /* dir 作成失敗は次の write で検知される */ }
+    const ptFile = join(ptDir, OWNER_NAME)
+    if (msg.channel.type === ChannelType.DM) {
+      try { writeFileSync(ptFile, chat_id, { encoding: 'utf8', mode: 0o600 }) } catch (err) {
+        process.stderr.write(`discord channel: failed to write progress-thread (DM): ${err}\n`)
+      }
+    } else if ('threads' in msg.channel) {
+      const name = (msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'progress'
+      try {
+        const thread = await (msg.channel as any).threads.create({
+          name,
+          autoArchiveDuration: 10080,
+          reason: 'cc-discord progress streaming',
+        })
+        writeFileSync(ptFile, thread.id, { encoding: 'utf8', mode: 0o600 })
+      } catch (err) {
+        process.stderr.write(`discord channel: failed to create progress thread: ${err}\n`)
+        try { writeFileSync(ptFile, chat_id, { encoding: 'utf8', mode: 0o600 }) } catch { /* 完全失敗時は次の inbound で再試行される */ }
+      }
+    } else {
+      try { writeFileSync(ptFile, chat_id, { encoding: 'utf8', mode: 0o600 }) } catch { /* 同上 */ }
+    }
+  }
+```
+
+### 接続点 (cc-discord 側)
+
+`plugin/src/notify.ts` の `progressChannelId()` がこのファイル (`~/.claude/channels/discord/progress-thread/<owner>`) を読み、`postMessage` の宛先に使う。
+
+- スレッド ID があれば → スレッドに投稿 (途中経過)
+- DM の場合は DM channel ID → DM に投稿
+- ファイル無 or 空 → `channelId()` (親チャンネル) にフォールバック
+
+`pretooluse.ts` (PreToolUse hook) と `watch.ts` (transcript 監視) は `notify` 経由で投稿するため、自動的に新しい宛先に切り替わる。`reply` ツールは MCP 経由で `chat_id` を直接受けるため本パッチの影響なし。
+
+### パラメータ
+
+| 定数 | 値 | 意味 |
+| --- | --- | --- |
+| `autoArchiveDuration` | `10080` (1 週間) | Discord のスレッド自動アーカイブ時間。最大値を採用し放置スレッドが残り続けるのを防ぐ |
+| スレッド名長 | 80 文字 | Discord の上限 100 字に対し余裕を持たせる。改行は空白へ正規化 |
+
+### 注意すべきポイント
+
+- **inbound 毎に新規スレッドを作る** (案 Q)。連続入力中の追加 inbound でも別スレッドが立つため、進捗の流れがメッセージ単位で分かれる。
+- **DM はスレッド作れない** (Discord 仕様)。channel ID をそのまま `progress-thread/<owner>` に書き、notify は DM に直接投稿する。
+- **OWNER_NAME 空のセッションは何もしない**。後方互換性として `CLAUDE_PROJECT_DIR` 未設定の単独セッション運用に影響を与えない。
+- **作成失敗時は親チャンネルにフォールバック**。Bot 権限不足 (`Create Public Threads`)、レート制限などで `threads.create` が throw した場合、`chat_id` を書いて progress も親チャンネルに流す。
+- **反映には再起動が必要**: channel server は起動時に `server.ts` を読む。編集後は Claude Code を
+  `claude --channels plugin:discord@claude-plugins-official` で起動し直す。
+- **検証**: `bun build "<server.ts のパス>" --target node --outfile <tmp>` でトランスパイルが通れば構文 OK。
+- **plugin 更新で消える**: `/plugin update` や再インストールでキャッシュが置き換わると失われる。本書のコードを新バージョンの `server.ts` に再適用する。
+- **bot 権限**: スレッド作成には `Create Public Threads` 権限が必要。`threads` を持たないチャンネル種 (forum 等) では fallback パスが動作する。
+
+### 関連
+
+- `plugin/src/notify.ts` の `progressChannelId()` 関数
+- メモリ: `cc-discord-channel-enhancements-plan` (本改変の設計計画を参照している)

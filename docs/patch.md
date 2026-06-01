@@ -104,12 +104,12 @@ messageCreate ハンドラ内の、元はこうなっている箇所:
 #### 3. reply 時に typing を停止
 
 `mcp.setRequestHandler(CallToolRequestSchema, ...)` の `case 'reply':` で、`chat_id` 取得直後に
-`stopTyping(chat_id)` を 1 行追加:
+`clearTyping(chat_id)` を 1 行追加(無条件停止)。
 
 ```typescript
       case 'reply': {
         const chat_id = args.chat_id as string
-        stopTyping(chat_id)        // ← この 1 行を追加
+        clearTyping(chat_id)       // ← この 1 行を追加 (reply で無条件停止)
         const text = args.text as string
         // ...以下は元のまま
 ```
@@ -123,7 +123,7 @@ messageCreate ハンドラ内の、元はこうなっている箇所:
 
 ### 注意すべきポイント
 
-- **参照カウント方式**: 複数メッセージを同時処理中でも typing が消えないよう、inbound で pending++ / reply で pending-- / 0 で停止する (`startTyping` / `stopTyping` / `clearTyping` の3関数)。これにより「思考中に別メッセージを投げると入力中表示が消える」不具合を解消。注意: Claude が reply しないターン(端末作業のみ等)では pending が減らず、安全弁(10分)まで typing が残ることがある。
+- **無条件停止方式**: reply 時に `clearTyping` を呼んで typing を即停止する。`startTyping` は重複 inbound に対し `pending++` するが、reply の経路では `stopTyping` (`pending--`) を使わず `clearTyping` で一括停止する。これにより interrupt 由来の永続 pending(reply されないターンがあると pending が減らず安全弁 10 分まで残る)を根絶し「タスク完了後も入力中が消えない」事象を解消する。トレードオフ: ユーザー連続入力中に最初の reply で typing がいったん消え、2 つ目以降の inbound の処理は typing 無しで進む(一般的な bot 体験で違和感は少ない)。`stopTyping` 関数自体は ref-counting の選択肢として残してあり、安全弁 10 分のフォールバックも維持。
 - **反映には再起動が必要**: channel server は起動時に `server.ts` を読む。編集後は Claude Code を
   `claude --channels plugin:discord@claude-plugins-official` で起動し直す。
 - **検証**: `bun build "<server.ts のパス>" --target node --outfile <tmp>` でトランスパイルが通れば構文 OK

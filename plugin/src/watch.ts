@@ -29,8 +29,12 @@ export function extractMessages(line: string): string[] {
       // thinkingGist が空文字(空入力)を返す場合は追加しない。
       const gist = thinkingGist(b.thinking)
       if (gist) results.push(gist)
-    } else if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
-      results.push('💬 ' + b.text.trim().slice(0, 1800))
+    } else if (b.type === 'text' && typeof b.text === 'string') {
+      const t = b.text.trim()
+      if (!t) continue
+      // resume 時に Claude が出す定型応答は Discord に流さない
+      if (t === 'No response requested.') continue
+      results.push('💬 ' + t.slice(0, 1800))
     } else if (b.type === 'tool_use' && typeof b.name === 'string') {
       // tool_use も transcript から拾って同一経路で送る。PreToolUse hook 経由の即時送信は
       // assistant message の transcript 書き込みより早く発火するため text と並びが逆転する。

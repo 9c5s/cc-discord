@@ -32,10 +32,22 @@ export function channelId(): string | null {
   return readRoute(n)
 }
 
+// 進捗用の宛先 ID を progress-thread ファイルから解決する。
+// guild text チャンネルでは server.ts が inbound 毎に新規スレッドを作って ID を書き、DM ではチャンネル ID をそのまま書く。
+// ファイルが無い、または読めない場合は channelId() にフォールバックする。
+export function progressChannelId(): string | null {
+  const n = ownerName()
+  if (!n) return null
+  const f = join(stateDir(), 'progress-thread', n)
+  if (!existsSync(f)) return channelId()
+  const v = readFileSync(f, 'utf8').trim()
+  return v || channelId()
+}
+
 // Discord REST API でメッセージを投稿する
 async function postMessage(text: string): Promise<void> {
   const t = token()
-  const cid = channelId()
+  const cid = progressChannelId()
   if (!t || !cid || !text.trim()) return
   await fetch(`${API}/channels/${cid}/messages`, {
     method: 'POST',

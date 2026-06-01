@@ -59,28 +59,8 @@ async function postMessage(text: string): Promise<void> {
   })
 }
 
-// hook(単発)用 -- 即時送信
+// 即時送信。
+// 旧 enqueue/flush の 1.5 秒バッファディレイで watch 経由の text 通知が遅れていたため廃止した。
 export async function sendNow(line: string): Promise<void> {
   await postMessage(line)
-}
-
-// 監視(常駐)用 -- バッファ経由で送信
-const buffer: string[] = []
-let timer: ReturnType<typeof setTimeout> | null = null
-const MAX_BUFFER = 20
-
-// バッファに追加し 1.5 秒後にフラッシュを予約する
-export function enqueue(line: string): void {
-  buffer.push(line)
-  // バッファ上限を超えたら古いエントリをドロップする
-  if (buffer.length > MAX_BUFFER) buffer.splice(0, buffer.length - MAX_BUFFER)
-  if (!timer) timer = setTimeout(flush, 1500)
-}
-
-// バッファを結合して1メッセージとして送信する
-function flush(): void {
-  timer = null
-  if (buffer.length === 0) return
-  const chunk = buffer.splice(0, buffer.length).join('\n')
-  void postMessage(chunk)
 }

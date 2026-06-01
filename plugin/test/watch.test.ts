@@ -53,3 +53,13 @@ test('複数ブロックを順に抽出する', () => {
 test('空行はスキップする', () => {
   expect(extractMessages('')).toEqual([])
 })
+
+test('"No response requested." はスキップする', () => {
+  const line = '{"type":"assistant","message":{"content":[{"type":"text","text":"No response requested."}]}}'
+  expect(extractMessages(line)).toEqual([])
+})
+
+test('前後空白付きの "No response requested." もスキップする', () => {
+  const line = '{"type":"assistant","message":{"content":[{"type":"text","text":"  No response requested.\\n"}]}}'
+  expect(extractMessages(line)).toEqual([])
+})

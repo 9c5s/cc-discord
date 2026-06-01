@@ -1,5 +1,5 @@
 import { thinkingGist } from './summarize'
-import { enqueue, ownerName } from './notify'
+import { sendNow, ownerName } from './notify'
 import { stateDir } from './routes'
 import { statSync, openSync, readSync, closeSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
@@ -52,7 +52,7 @@ if (import.meta.main) {
   let offset = existsSync(transcriptPath) ? statSync(transcriptPath).size : 0
   let carry = ''
 
-  // transcript JSONL を 1 秒おきにポーリングし新規行を処理する
+  // transcript JSONL を 250ms ごとにポーリングし新規行を処理する
   function poll() {
     try {
       if (!existsSync(transcriptPath)) return
@@ -71,9 +71,13 @@ if (import.meta.main) {
       }
       const lines = carry.split('\n')
       carry = lines.pop() ?? '' // 未完行は次回へ持ち越す
+      // 1 ポーリング分のメッセージを集めて 1 通の Discord メッセージにまとめる。
+      // バッファ用タイマーは持たず、ポーリングサイクル自体が自然なまとめ単位になる。
+      const messages: string[] = []
       for (const line of lines) {
-        for (const msg of extractMessages(line)) enqueue(msg)
+        for (const msg of extractMessages(line)) messages.push(msg)
       }
+      if (messages.length > 0) void sendNow(messages.join('\n'))
     } catch (e) {
       // セッションは止めない。DEBUG 時のみ stderr に出す
       if (process.env.DISCORD_NOTIFY_DEBUG) process.stderr.write(`[watch] ${e}\n`)
@@ -93,7 +97,9 @@ if (import.meta.main) {
   } catch { /* PID ファイル読み取りエラーは無視する */ }
   try { writeFileSync(pidFile, String(process.pid), { encoding: 'utf8', mode: 0o600 }) } catch { /* 書き込み失敗は無視する */ }
 
-  const interval = setInterval(poll, 1000)
+  // 250ms: 知覚的に即時、CPU/API レート制限とも余裕(statSync 約1ms を 4回/秒)。
+  // これより短くするなら fs.watch への切替を検討する。
+  const interval = setInterval(poll, 250)
   // interval.unref() を呼ばない — イベントループを保持して常駐する
   process.on('SIGTERM', () => {
     clearInterval(interval)

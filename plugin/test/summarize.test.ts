@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { toolSummary, thinkingGist } from '../src/summarize'
+import { toolSummary, thinkingGist, threadName } from '../src/summarize'
 
 test('toolSummary は絵文字も含めて file_path をインラインコードにする', () => {
   expect(toolSummary('Read', { file_path: 'C:/x/server.ts' })).toBe('`🔧 Read server.ts`')
@@ -40,4 +40,29 @@ test('thinkingGist は長文を上限内に収める', () => {
   expect(g.startsWith('🧠 ')).toBe(true)
   expect(g.endsWith('…')).toBe(true)
   expect(g.length).toBeLessThanOrEqual(200)
+})
+
+test('threadName は日時プレフィックスと本文でスレッド名を作る', () => {
+  expect(threadName('再起動した', new Date(2026, 5, 1, 20, 13))).toBe('[06/01 20:13] 再起動した')
+})
+
+test('threadName は月日時分をゼロ埋めする', () => {
+  expect(threadName('x', new Date(2026, 0, 5, 9, 3))).toBe('[01/05 09:03] x')
+})
+
+test('threadName は改行と連続空白を空白1つに正規化する', () => {
+  expect(threadName('a\n\nb  c', new Date(2026, 5, 1, 20, 13))).toBe('[06/01 20:13] a b c')
+})
+
+test('threadName は80字ちょうどは切らない', () => {
+  expect(threadName('あ'.repeat(80), new Date(2026, 5, 1, 20, 13))).toBe('[06/01 20:13] ' + 'あ'.repeat(80))
+})
+
+test('threadName は80字超の本文を79字と…に切り詰める', () => {
+  expect(threadName('あ'.repeat(100), new Date(2026, 5, 1, 20, 13))).toBe('[06/01 20:13] ' + 'あ'.repeat(79) + '…')
+})
+
+test('threadName は本文が空白のみなら progress にする', () => {
+  expect(threadName('', new Date(2026, 5, 1, 20, 13))).toBe('[06/01 20:13] progress')
+  expect(threadName('   ', new Date(2026, 5, 1, 20, 13))).toBe('[06/01 20:13] progress')
 })

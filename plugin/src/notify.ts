@@ -59,8 +59,10 @@ async function postMessage(text: string): Promise<void> {
   })
 }
 
-// 即時送信。
-// 旧 enqueue/flush の 1.5 秒バッファディレイで watch 経由の text 通知が遅れていたため廃止した。
+// 即時送信。watch.ts のポーリングから呼ばれる唯一の送信口。
+// 旧設計では PreToolUse hook 経由の tool 通知と watch 経由の text 通知を別経路で送っていたが、
+// hook の発火が assistant message の transcript 書き込みより早く Discord 上で順序が逆転していた。
+// watch.ts に tool_use 抽出を寄せて単一経路化することで JSONL の content 順を表示順に保つ。
 export async function sendNow(line: string): Promise<void> {
   await postMessage(line)
 }

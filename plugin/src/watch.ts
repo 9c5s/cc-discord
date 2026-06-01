@@ -1,4 +1,4 @@
-import { thinkingGist } from './summarize'
+import { thinkingGist, toolSummary } from './summarize'
 import { sendNow, ownerName } from './notify'
 import { stateDir } from './routes'
 import { statSync, openSync, readSync, closeSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
@@ -31,8 +31,14 @@ export function extractMessages(line: string): string[] {
       if (gist) results.push(gist)
     } else if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
       results.push('💬 ' + b.text.trim().slice(0, 1800))
+    } else if (b.type === 'tool_use' && typeof b.name === 'string') {
+      // tool_use も transcript から拾って同一経路で送る。PreToolUse hook 経由の即時送信は
+      // assistant message の transcript 書き込みより早く発火するため text と並びが逆転する。
+      // watch 一本化することで JSONL の content 順を Discord 表示順に保つ。
+      const input = (typeof b.input === 'object' && b.input !== null) ? b.input as Record<string, unknown> : {}
+      results.push(toolSummary(b.name, input))
     }
-    // tool_use やその他のブロックはスキップする
+    // その他のブロックはスキップする
   }
   return results
 }

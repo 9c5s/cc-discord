@@ -1,5 +1,5 @@
 import { thinkingGist } from './summarize'
-import { enqueue, channelId, ownerName } from './notify'
+import { enqueue, ownerName } from './notify'
 import { stateDir } from './routes'
 import { statSync, openSync, readSync, closeSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
@@ -41,8 +41,12 @@ export function extractMessages(line: string): string[] {
 // テストからインポートされた場合は実行しない
 if (import.meta.main) {
   const transcriptPath = process.argv[2]
-  // 担当チャンネルなし、または transcript_path 引数なしなら即終了する
-  if (!transcriptPath || !channelId()) process.exit(0)
+  // owner 未解決(routing 対象外)または transcript_path 引数なしなら即終了する。
+  // 注: channelId(routes)はここでは見ない。channel server の ready で routes が
+  // 書かれるまで起動レースになり、見てしまうと watch が即死して以降の途中経過が
+  // 一切出なくなる。owner さえあれば常駐し、routes 書き込み後に notify が channelId を
+  // 解決して送信する(routes 未解決の間は notify 側で送信スキップされるだけ)。
+  if (!transcriptPath || !ownerName()) process.exit(0)
 
   // 既存分はスキップし、以降の新規行を追う
   let offset = existsSync(transcriptPath) ? statSync(transcriptPath).size : 0

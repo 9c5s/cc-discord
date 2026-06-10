@@ -4,7 +4,17 @@ import { join } from 'path'
 
 const raw = await new Response(Bun.stdin.stream()).text()
 let tp = ''
-try { tp = JSON.parse(raw).transcript_path ?? '' } catch {}
+try {
+  const payload = JSON.parse(raw)
+  tp = payload.transcript_path ?? ''
+  if (!tp) {
+    // transcript_path がペイロードに含まれない場合は stderr に診断を出す。
+    // hook プロセスの stderr は Claude Code 側で観測可能である。
+    process.stderr.write('[watch-launch] transcript_path not found in hook payload\n')
+  }
+} catch (e) {
+  process.stderr.write(`[watch-launch] failed to parse hook payload: ${e}\n`)
+}
 if (tp) {
   // watch.ts は同じ src ディレクトリにある。import.meta.dir で解決する(Windows でも確実)。
   const watch = join(import.meta.dir, 'watch.ts')

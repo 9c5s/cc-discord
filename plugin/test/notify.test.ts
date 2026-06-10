@@ -5,11 +5,11 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
-// テスト用の一時ディレクトリを設定して、本番 state を保護する。
-// routes.test.ts と同じパターンを踏襲する。
+// テスト用の一時ディレクトリを設定して 本番 state を保護する
+// routes.test.ts と同じパターンを踏襲する
 const testTmpDir = join(tmpdir(), `discord-notify-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`)
 
-// 各テストの実行前後で環境変数を正確に復元するためにバックアップを保持する。
+// 各テストの実行前後で環境変数を正確に復元するためにバックアップを保持する
 let savedStateDir: string | undefined
 let savedProjectDir: string | undefined
 

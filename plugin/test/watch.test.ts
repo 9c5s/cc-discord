@@ -80,7 +80,7 @@ test('packMessages は空配列で空配列を返す', () => {
   expect(packMessages([], 10)).toEqual([])
 })
 
-// タスクF: 1800 コードポイント超の text が切り詰められ ... が付くテスト
+// 1800 コードポイント超の text が切り詰められ ... が付くテスト
 test('1800 コードポイント超の text は切り詰めて ... を付ける', () => {
   const longText = 'あ'.repeat(1801)
   const line = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: longText }] } })
@@ -93,7 +93,7 @@ test('1800 コードポイント以下の text はそのまま通す', () => {
   expect(extractMessages(line)).toEqual(['💬 ' + 'あ'.repeat(1800)])
 })
 
-// タスクG: splitLines のテスト
+// splitLines のテスト
 test('splitLines: 未完行は carry に持ち越す', () => {
   expect(splitLines('', 'abc\ndef')).toEqual({ lines: ['abc'], carry: 'def' })
 })

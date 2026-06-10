@@ -12,12 +12,22 @@ export function routesDir(): string {
 }
 
 export function writeRoute(normName: string, channelId: string): void {
+  // Enforce contract: only accept normalized names matching the normalized pattern.
+  // Non-matching names (empty, containing uppercase, special chars, etc) are rejected.
+  if (!/^[a-z0-9-]+$/.test(normName)) {
+    throw new Error(`Invalid normalized name: ${normName}`)
+  }
   const dir = routesDir()
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   writeFileSync(join(dir, normName), channelId, { encoding: 'utf8', mode: 0o600 })
 }
 
 export function readRoute(normName: string): string | null {
+  // Enforce contract: only accept normalized names matching the normalized pattern.
+  // Non-matching names (empty, containing uppercase, special chars, etc) return null.
+  if (!/^[a-z0-9-]+$/.test(normName)) {
+    return null
+  }
   const f = join(routesDir(), normName)
   if (!existsSync(f)) return null
   const v = readFileSync(f, 'utf8').trim()

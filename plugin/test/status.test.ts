@@ -19,25 +19,25 @@ const fullData = {
 
 test('buildStatusBlock は branch/model+effort/ctx+5h+7d の3行コードブロックを作る', () => {
   expect(buildStatusBlock(fullData, 'feat/channel-enhancements')).toBe(
-    '```\nfeat/channel-enhancements\nFable 5 | effort max\nctx 14% | 5h 63% ↻10:10 | 7d 16% ↻6/14 3:00\n```',
+    '```\n🌿 feat/channel-enhancements\n👾 Fable 5 | 🧠 max\n📊 14% | ⏰ 63% 10:10 | 📅 16% 6/14 3:00\n```',
   )
 })
 
 test('buildStatusBlock は effort が無ければモデル名のみにする', () => {
   const d = { ...fullData, effort: undefined }
   expect(buildStatusBlock(d, null)).toBe(
-    '```\nFable 5\nctx 14% | 5h 63% ↻10:10 | 7d 16% ↻6/14 3:00\n```',
+    '```\n👾 Fable 5\n📊 14% | ⏰ 63% 10:10 | 📅 16% 6/14 3:00\n```',
   )
 })
 
 test('buildStatusBlock は rate_limits が無ければ ctx のみにする', () => {
   const d = { model: { display_name: 'Fable 5' }, context_window: { used_percentage: 7 } }
-  expect(buildStatusBlock(d, 'main')).toBe('```\nmain\nFable 5\nctx 7%\n```')
+  expect(buildStatusBlock(d, 'main')).toBe('```\n🌿 main\n👾 Fable 5\n📊 7%\n```')
 })
 
 test('buildStatusBlock は resets_at が無ければリセット時刻を省く', () => {
   const d = { rate_limits: { five_hour: { used_percentage: 50 } } }
-  expect(buildStatusBlock(d, null)).toBe('```\n5h 50%\n```')
+  expect(buildStatusBlock(d, null)).toBe('```\n⏰ 50%\n```')
 })
 
 test('buildStatusBlock は要素が全て欠けるとき空文字を返す', () => {

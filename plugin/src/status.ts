@@ -43,36 +43,38 @@ function resetDate(ts: number): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${resetTime(ts)}`
 }
 
-// rate_limits の1バケット(five_hour/seven_day)を "5h 63% ↻19:10" 形式にする
-function rateSeg(rl: J | null, key: string, label: string, fmt: (ts: number) => string): string | null {
+// rate_limits の1バケット(five_hour/seven_day)を "⏰ 63% 19:10" 形式にする。
+// アイコンが 5h/7d のラベルを兼ねる(9c5s 指定、2026-06-10)
+function rateSeg(rl: J | null, key: string, icon: string, fmt: (ts: number) => string): string | null {
   const b = obj(rl?.[key])
   if (!b) return null
   const pct = num(b.used_percentage)
   if (pct === null) return null
   const ts = num(b.resets_at)
-  return ts === null ? `${label} ${Math.round(pct)}%` : `${label} ${Math.round(pct)}% ↻${fmt(ts)}`
+  return ts === null ? `${icon} ${Math.round(pct)}%` : `${icon} ${Math.round(pct)}% ${fmt(ts)}`
 }
 
 // ステータスブロック本体。3行構成で、取得できない要素は行ごと/要素ごとに省く。
-// 1行目: ブランチ名
-// 2行目: モデル名 | effort <level>
-// 3行目: ctx <使用率>% | 5h <使用率>% ↻<リセット> | 7d <使用率>% ↻<リセット>
+// 各項目はテキストラベルの代わりに絵文字を頭に付ける(コードブロック内で安定表示する世代を選定済み)。
+// 1行目: 🌿 ブランチ名
+// 2行目: 👾 モデル名 | 🧠 <effort level>
+// 3行目: 📊 <ctx使用率>% | ⏰ <5h使用率>% <リセット> | 📅 <7d使用率>% <リセット>
 // 全行が欠けるときは空文字を返し、呼び出し側が付与をスキップできるようにする。
 export function buildStatusBlock(data: J, branch: string | null): string {
   const lines: string[] = []
-  if (branch) lines.push(branch)
+  if (branch) lines.push(`🌿 ${branch}`)
 
   const model = str(obj(data.model)?.display_name)
   const effort = str(obj(data.effort)?.level)
-  if (model) lines.push(effort ? `${model} | effort ${effort}` : model)
+  if (model) lines.push(effort ? `👾 ${model} | 🧠 ${effort}` : `👾 ${model}`)
 
   const parts: string[] = []
   const ctx = num(obj(data.context_window)?.used_percentage)
-  if (ctx !== null) parts.push(`ctx ${Math.round(ctx)}%`)
+  if (ctx !== null) parts.push(`📊 ${Math.round(ctx)}%`)
   const rl = obj(data.rate_limits)
-  const r5 = rateSeg(rl, 'five_hour', '5h', resetTime)
+  const r5 = rateSeg(rl, 'five_hour', '⏰', resetTime)
   if (r5) parts.push(r5)
-  const r7 = rateSeg(rl, 'seven_day', '7d', resetDate)
+  const r7 = rateSeg(rl, 'seven_day', '📅', resetDate)
   if (r7) parts.push(r7)
   if (parts.length > 0) lines.push(parts.join(' | '))
 

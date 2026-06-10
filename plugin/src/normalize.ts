@@ -9,3 +9,11 @@ export function normalizeName(input: string): string {
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
 }
+
+// ディレクトリパスのベース名を正規化して所有者名にする。
+// Windows (\\) と POSIX (/) の両対応で末尾の区切り文字を除去し、
+// ベース名を抽出して normalizeName に通す。パスが無効な場合は空文字を返す。
+export function ownerFromDir(dir: string): string {
+  const base = dir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? ''
+  return normalizeName(base)
+}

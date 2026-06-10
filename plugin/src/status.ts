@@ -1,5 +1,5 @@
 import { readFileSync } from 'fs'
-import { join } from 'path'
+import { join, resolve } from 'path'
 
 // statusline JSON からリプライ末尾に付ける3行ステータスブロックを構築するモジュール。
 // statusline-tee.ts が書き込み、discord プラグイン server.ts(patch)が読んで reply 末尾に付ける。
@@ -11,6 +11,7 @@ const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : nul
 
 // .git/HEAD からブランチ名を読む。subprocess を使わずファイル直読みで済ませる。
 // detached HEAD は短縮ハッシュを返し、.git がファイルの worktree 形式は gitdir 参照を辿る。
+// gitdir が相対パスの場合は projectDir 基準で解決する(submodule の標準形式に対応)。
 export function readBranch(projectDir: string): string | null {
   try {
     const gitPath = join(projectDir, '.git')
@@ -20,7 +21,7 @@ export function readBranch(projectDir: string): string | null {
     } catch {
       const m = readFileSync(gitPath, 'utf8').match(/^gitdir:\s*(.+?)\s*$/m)
       if (!m) return null
-      head = readFileSync(join(m[1], 'HEAD'), 'utf8')
+      head = readFileSync(join(resolve(projectDir, m[1]), 'HEAD'), 'utf8')
     }
     const ref = head.trim()
     const m = ref.match(/^ref:\s*refs\/heads\/(.+)$/)

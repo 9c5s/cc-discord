@@ -5,7 +5,7 @@ import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { tmpdir, homedir } from 'os'
 
-// テスト用の一時ディレクトリを設定して、本番 routes を保護する
+// テスト用の一時ディレクトリを設定して 本番 routes を保護する
 const testTmpDir = join(tmpdir(), `discord-routes-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`)
 
 beforeEach(() => {

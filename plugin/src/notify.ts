@@ -7,9 +7,9 @@ const API = 'https://discord.com/api/v10'
 // @silent フラグ: Discord の SUPPRESS_NOTIFICATIONS (ビット12)
 const SUPPRESS_NOTIFICATIONS = 1 << 12 // 4096
 
-// --- タスクA: デバッグログ基盤 ---
-// DISCORD_NOTIFY_DEBUG 設定時のみ stateDir()/logs/watch-<owner>.log へ追記する。
-// ログ失敗で本体を止めないため全体を try/catch で包む。
+// デバッグログ基盤 ---
+// DISCORD_NOTIFY_DEBUG 設定時のみ stateDir()/logs/watch-<owner>.log へ追記する
+// ログ失敗で本体を止めないため全体を try/catch で包む
 export function debugLog(msg: string): void {
   if (!process.env.DISCORD_NOTIFY_DEBUG) return
   try {
@@ -22,8 +22,8 @@ export function debugLog(msg: string): void {
   }
 }
 
-// ボットトークンは環境変数を優先し、なければ .env ファイルから読む。
-// readFileSync は TOCTOU で throw しうるため try/catch で包み null フォールバックにする。
+// ボットトークンは環境変数を優先し なければ .env ファイルから読む
+// readFileSync は TOCTOU で throw しうるため try/catch で包み null フォールバックにする
 function token(): string | null {
   if (process.env.DISCORD_BOT_TOKEN) return process.env.DISCORD_BOT_TOKEN
   const envf = join(stateDir(), '.env')
@@ -42,8 +42,8 @@ export function ownerName(): string {
   return ownerFromDir(process.env.CLAUDE_PROJECT_DIR ?? '')
 }
 
-// 担当チャンネル ID を routes から解決する。
-// readRoute は内部で readFileSync を呼ぶため try/catch で包み null フォールバックにする。
+// 担当チャンネル ID を routes から解決する
+// readRoute は内部で readFileSync を呼ぶため try/catch で包み null フォールバックにする
 export function channelId(): string | null {
   const n = ownerName()
   if (!n) return null
@@ -54,11 +54,11 @@ export function channelId(): string | null {
   }
 }
 
-// 進捗用の宛先 ID を progress-thread ファイルから解決する。
-// guild text チャンネルでは server.ts が inbound 毎に新規スレッドを作って ID を書き、DM ではチャンネル ID をそのまま書く。
-// ファイルが無い、または読めない場合は channelId() にフォールバックする。
-// readFileSync は server.ts が inbound 毎にファイルを書き換えるため TOCTOU で throw しうる。
-// throw を catch して channelId() にフォールバックする。
+// 進捗用の宛先 ID を progress-thread ファイルから解決する
+// guild text チャンネルでは server.ts が inbound 毎に新規スレッドを作って ID を書き DM ではチャンネル ID をそのまま書く
+// ファイルが無い または読めない場合は channelId() にフォールバックする
+// readFileSync は server.ts が inbound 毎にファイルを書き換えるため TOCTOU で throw しうる
+// throw を catch して channelId() にフォールバックする
 export function progressChannelId(): string | null {
   const n = ownerName()
   if (!n) return null
@@ -72,18 +72,18 @@ export function progressChannelId(): string | null {
   }
 }
 
-// --- タスクC: スキップ理由の変化通知用モジュール変数 ---
-// 毎ポーリングのノイズを避けるため、直前のスキップ理由を覚えて変化時のみ出力する。
+// スキップ理由の変化通知用モジュール変数 ---
+// 毎ポーリングのノイズを避けるため 直前のスキップ理由を覚えて変化時のみ出力する
 let lastSkipReason = ''
 
-// Discord REST API でメッセージを投稿する。
-// タスクB: HTTP エラー検知と 429 再送を実装する。
-// タスクC: 無音 return の理由を debugLog に出す。
+// Discord REST API でメッセージを投稿する
+// HTTP エラー検知と 429 再送を実装する
+// 無音 return の理由を debugLog に出す
 async function postMessage(text: string): Promise<void> {
   const t = token()
   const cid = progressChannelId()
 
-  // --- タスクC: スキップ理由の可視化 ---
+  // スキップ理由の可視化 ---
   if (!t) {
     const reason = 'skip: no token'
     if (lastSkipReason !== reason) { debugLog(reason); lastSkipReason = reason }
@@ -99,7 +99,8 @@ async function postMessage(text: string): Promise<void> {
   // スキップなしで送信できる場合はスキップ理由をリセットする
   lastSkipReason = ''
 
-  // 最終安全弁の切り捨て. サロゲートペアの途中で切らないよう, 末尾に孤立した
+  // 最終安全弁の切り捨て
+  // サロゲートペアの途中で切らないよう, 末尾に孤立した
   // 上位サロゲートが残った場合は 1 文字余分に落とす
   let content = text.slice(0, 1900)
   const last = content.charCodeAt(content.length - 1)
@@ -112,7 +113,7 @@ async function postMessage(text: string): Promise<void> {
     allowed_mentions: { parse: [] },
   })
 
-  // --- タスクB: fetch 実行とエラーハンドリング ---
+  // fetch 実行とエラーハンドリング ---
   let res: Response
   try {
     res = await fetch(`${API}/channels/${cid}/messages`, {
@@ -128,8 +129,9 @@ async function postMessage(text: string): Promise<void> {
 
   if (!res.ok) {
     if (res.status === 429) {
-      // 429: Discord API レートリミット。retry_after(秒) または Retry-After ヘッダで待つ。
-      // 上限は 5 秒とする。
+      // 429: Discord API レートリミット
+      // retry_after (秒) または Retry-After ヘッダで待つ
+      // 上限は 5 秒とする
       let waitSec = 1
       try {
         const json = await res.clone().json() as Record<string, unknown>
@@ -164,10 +166,11 @@ async function postMessage(text: string): Promise<void> {
   }
 }
 
-// 即時送信。watch.ts のポーリングから呼ばれる唯一の送信口。
-// 旧設計では PreToolUse hook 経由の tool 通知と watch 経由の text 通知を別経路で送っていたが、
-// hook の発火が assistant message の transcript 書き込みより早く Discord 上で順序が逆転していた。
-// watch.ts に tool_use 抽出を寄せて単一経路化することで JSONL の content 順を表示順に保つ。
+// 即時送信
+// watch.ts のポーリングから呼ばれる唯一の送信口
+// 旧設計では PreToolUse hook 経由の tool 通知と watch 経由の text 通知を別経路で送っていたが
+// hook の発火が assistant message の transcript 書き込みより早く Discord 上で順序が逆転していた
+// watch.ts に tool_use 抽出を寄せて単一経路化することで JSONL の content 順を表示順に保つ
 export async function sendNow(line: string): Promise<void> {
   await postMessage(line)
 }

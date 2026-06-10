@@ -4,8 +4,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { buildStatusBlock, readBranch } from '../src/status'
 
-// 注: bun test はタイムゾーンを UTC に固定するため、リセット時刻の期待値は UTC 表記である
-// 1781086200 = 2026-06-10 10:10 UTC, 1781406000 = 2026-06-14 03:00 UTC
+// 注: bun test はタイムゾーンを UTC に固定するため リセット時刻の期待値は UTC 表記である
+// 1781086200 = 2026-06-10 10: 10 UTC, 1781406000 = 2026-06-14 03: 00 UTC
 
 test('リセット時刻の期待値は UTC 前提である (bun test の既定 TZ)', () => {
   expect(new Date(0).getTimezoneOffset()).toBe(0)

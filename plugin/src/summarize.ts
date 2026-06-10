@@ -51,6 +51,10 @@ const DETAIL_KEYS = [
   'to', 'reason', 'subject', 'name', 'emoji', 'prompt', 'plan', 'text',
 ] as const
 
+// 補足を出すと直後の実投稿と内容が重複するツール(短縮名)。
+// discord:reply は text がそのまま返信として届くため、通知はツール名のみにする。
+const HIDE_BODY_TOOLS = new Set(['discord:reply'])
+
 // limit コードポイントを超える文字列は切り捨てて … を付ける。
 // サロゲートペアを分断しないよう code point 単位で数える。
 function truncate(s: string, limit: number): string {
@@ -87,10 +91,10 @@ function pickDetail(input: Record<string, unknown>): { key: string; value: strin
 // どのキーも `⚙️[ツール名] 補足` の空白区切り1行(`⚙️[Edit] watch.ts` / `⚙️[Agent] ログ調査`)とするが、
 // command と改行・バッククォート入りや上限超の本文はツール名の後で改行しコードブロックにする。
 // 本文の上限は command が 1800 字、その他は 200 字で、超過分は切り捨てて … を付ける。
-// hideBody が true なら本文を出さずツール名のみにする。
+// hideBody が true または HIDE_BODY_TOOLS のツールは本文を出さずツール名のみにする。
 export function toolSummary(name: string, input: Record<string, unknown>, hideBody = false): string {
   const n = shortToolName(name)
-  if (hideBody) return code(`⚙️[${n}]`)
+  if (hideBody || HIDE_BODY_TOOLS.has(n)) return code(`⚙️[${n}]`)
   const fp = input.file_path ?? input.notebook_path ?? input.scriptPath
   if (typeof fp === 'string') return code(`⚙️[${n}] ${fileName(fp)}`)
   const detail = pickDetail(input)

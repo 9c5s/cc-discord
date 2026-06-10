@@ -1,13 +1,46 @@
 import { basename } from 'path'
 
-// 絵文字を含む全体を 1 行ならインラインコード、複数行ならコードブロックで囲む。
+// ZWSP (U+200B)。コードブロック内の ``` の連なりを分断するために挟む不可視文字
+const ZWSP = String.fromCharCode(0x200b)
+
+// Discord メッセージ上限 2000 と notify 側の安全弁 slice(0,1900) に対し、
+// コードブロック装飾ぶんの余裕をみて command 本文は 1800 字を上限とする
+const COMMAND_LIMIT = 1800
+// command 以外の長文引数 (prompt/plan/text 等) の上限
+const DETAIL_LIMIT = 200
+
+// 絵文字を含む全体を、1行かつバッククォート無しならインラインコード、それ以外はコードブロックで囲む。
+// 本文に ` があるとインラインコードの囲みが壊れるためブロックに逃がし、
+// ブロック内で終端と衝突する ``` の連なりは ZWSP を挟んで分断する。
 function code(body: string): string {
-  return body.includes('\n') ? `\`\`\`\n${body}\n\`\`\`` : `\`${body}\``
+  if (!body.includes('\n') && !body.includes('`')) return `\`${body}\``
+  return `\`\`\`\n${body.replaceAll('```', `\`${ZWSP}\`${ZWSP}\``)}\n\`\`\``
 }
 
 // バックスラッシュ区切りにも対応してパスからファイル名を取り出す
 function fileName(p: string): string {
   return basename(p.replace(/\\/g, '/'))
+}
+
+// mcp__<server>__<tool> 形式のツール名を <server>:<tool> に短縮する。
+// それ以外のツール名はそのまま返す。
+function shortToolName(name: string): string {
+  if (!name.startsWith('mcp__')) return name
+  const parts = name.split('__')
+  if (parts.length < 3) return name
+  return `${shortServerName(parts[1])}:${parts.slice(2).join('__')}`
+}
+
+// mcp サーバー名の定型プレフィックスを剥いで短縮する。
+// plugin_<プラグイン名>_<サーバー名> はサーバー名のみ、claude_ai_<コネクタ名> はコネクタ名のみ残す。
+function shortServerName(server: string): string {
+  if (server.startsWith('plugin_')) {
+    const rest = server.slice('plugin_'.length)
+    const i = rest.lastIndexOf('_')
+    return i >= 0 ? rest.slice(i + 1) : rest
+  }
+  if (server.startsWith('claude_ai_')) return server.slice('claude_ai_'.length)
+  return server
 }
 
 // 補足情報として拾う引数キーの優先順。前方ほど短い要約に向くキーを置き、
@@ -18,11 +51,11 @@ const DETAIL_KEYS = [
   'to', 'reason', 'subject', 'name', 'emoji', 'prompt', 'plan', 'text',
 ] as const
 
-// 100 コードポイントを超える文字列は 100 で切り捨て … を付ける。
+// limit コードポイントを超える文字列は切り捨てて … を付ける。
 // サロゲートペアを分断しないよう code point 単位で数える。
-function truncate(s: string): string {
+function truncate(s: string, limit: number): string {
   const points = [...s]
-  return points.length > 100 ? points.slice(0, 100).join('') + '…' : s
+  return points.length > limit ? points.slice(0, limit).join('') + '…' : s
 }
 
 // tool_input から補足情報を1つ選ぶ。string 引数を DETAIL_KEYS の優先順で探し、
@@ -51,20 +84,22 @@ function pickDetail(input: Record<string, unknown>): { key: string; value: strin
 }
 
 // tool_input から代表的な引数を1つ選び、絵文字とツール名と本文をまとめてコード整形する。
-// どのキーも `⚙️ [ツール名] 補足` の空白区切り1行(`⚙️ [Edit] watch.ts` / `⚙️ [Agent] ログ調査`)とするが、
-// command と改行入り・100字超の本文はツール名の後で改行しコードブロックにする。
-// 100字を超える本文は100字で切り捨て … を付ける。hideBody が true なら本文を出さずツール名のみにする。
+// どのキーも `⚙️[ツール名] 補足` の空白区切り1行(`⚙️[Edit] watch.ts` / `⚙️[Agent] ログ調査`)とするが、
+// command と改行・バッククォート入りや上限超の本文はツール名の後で改行しコードブロックにする。
+// 本文の上限は command が 1800 字、その他は 200 字で、超過分は切り捨てて … を付ける。
+// hideBody が true なら本文を出さずツール名のみにする。
 export function toolSummary(name: string, input: Record<string, unknown>, hideBody = false): string {
-  if (hideBody) return code(`⚙️ [${name}]`)
+  const n = shortToolName(name)
+  if (hideBody) return code(`⚙️[${n}]`)
   const fp = input.file_path ?? input.notebook_path ?? input.scriptPath
-  if (typeof fp === 'string') return code(`⚙️ [${name}] ${fileName(fp)}`)
+  if (typeof fp === 'string') return code(`⚙️[${n}] ${fileName(fp)}`)
   const detail = pickDetail(input)
-  if (!detail) return code(`⚙️ [${name}]`)
-  const body = truncate(detail.value)
-  if (detail.key === 'command' || body !== detail.value || body.includes('\n')) {
-    return code(`⚙️ [${name}]\n${body}`)
+  if (!detail) return code(`⚙️[${n}]`)
+  const body = truncate(detail.value, detail.key === 'command' ? COMMAND_LIMIT : DETAIL_LIMIT)
+  if (detail.key === 'command' || body !== detail.value || body.includes('\n') || body.includes('`')) {
+    return code(`⚙️[${n}]\n${body}`)
   }
-  return code(`⚙️ [${name}] ${body}`)
+  return code(`⚙️[${n}] ${body}`)
 }
 
 // thinking の先頭1〜2文を要点として抽出(最大200字)。

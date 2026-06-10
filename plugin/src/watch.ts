@@ -47,6 +47,25 @@ export function extractMessages(line: string): string[] {
   return results
 }
 
+// メッセージ配列を改行結合で maxLen 以下のチャンク列に詰める。
+// notify 側は 1900 字で切り捨てるため、まとめ送信が長くなるとコードブロックの終端ごと
+// 失われて表示が壊れる。これを防ぐためメッセージ境界で送信単位を分割する。
+// 単一メッセージが maxLen を超える場合はそのまま 1 チャンクにする (notify 側の切り捨てが最終安全弁)。
+export function packMessages(messages: string[], maxLen = 1900): string[] {
+  const chunks: string[] = []
+  let cur = ''
+  for (const m of messages) {
+    if (!cur) cur = m
+    else if (cur.length + 1 + m.length <= maxLen) cur += '\n' + m
+    else {
+      chunks.push(cur)
+      cur = m
+    }
+  }
+  if (cur) chunks.push(cur)
+  return chunks
+}
+
 // このファイルが直接実行された場合のみ常駐ループを起動する
 // テストからインポートされた場合は実行しない
 if (import.meta.main) {
@@ -87,7 +106,11 @@ if (import.meta.main) {
       for (const line of lines) {
         for (const msg of extractMessages(line)) messages.push(msg)
       }
-      if (messages.length > 0) void sendNow(messages.join('\n'))
+      if (messages.length > 0) {
+        // 1900 字超のまとめ送信はチャンクに分割し、順序を保つため直列に送る
+        const chunks = packMessages(messages)
+        void (async () => { for (const c of chunks) await sendNow(c) })()
+      }
     } catch (e) {
       // セッションは止めない。DEBUG 時のみ stderr に出す
       if (process.env.DISCORD_NOTIFY_DEBUG) process.stderr.write(`[watch] ${e}\n`)

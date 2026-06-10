@@ -52,7 +52,8 @@ async function postMessage(text: string): Promise<void> {
   await fetch(`${API}/channels/${cid}/messages`, {
     method: 'POST',
     headers: { Authorization: `Bot ${t}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content: text.slice(0, 1900), flags: SUPPRESS_NOTIFICATIONS }),
+    // allowed_mentions: 進捗コピーに <@id> や @everyone が含まれても ping が発生しないよう全メンション解決を無効化する
+    body: JSON.stringify({ content: text.slice(0, 1900), flags: SUPPRESS_NOTIFICATIONS, allowed_mentions: { parse: [] } }),
   }).catch((e: unknown) => {
     // 本番は無音だが DISCORD_NOTIFY_DEBUG 指定時のみ stderr に出す
     if (process.env.DISCORD_NOTIFY_DEBUG) process.stderr.write(`[notify] fetch failed: ${e}\n`)

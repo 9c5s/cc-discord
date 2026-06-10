@@ -1,7 +1,9 @@
-// Claude Code の statusLine コマンドをラップする tee スクリプト。
-// stdin の statusline JSON を stateDir に保存し、整形済みステータスブロック(.txt)を生成した上で、
-// 本来の statusline コマンドへパススルーする。.txt は discord プラグイン server.ts(patch)が
-// reply 末尾に付与するために読む。整形ロジックは status.ts に置き patch 側を最小に保つ。
+// Claude Code の statusLine コマンドをラップする tee スクリプト
+// stdin の statusline JSON を stateDir に保存し 整形済みステータスブロック (.txt) を生成した上で
+// 本来の statusline コマンドへパススルーする
+// .txt は discord プラグイン server.ts (patch) が
+// reply 末尾に付与するために読む
+// 整形ロジックは status.ts に置き patch 側を最小に保つ
 // 使い方: bun statusline-tee.ts <本来のコマンド> [args...]
 import { spawn } from 'child_process'
 import { mkdirSync, writeFileSync, renameSync } from 'fs'
@@ -28,7 +30,8 @@ function writeAtomic(path: string, content: string): void {
   renameSync(path + '.tmp', path)
 }
 
-// JSON 保存と整形済みブロック生成。失敗しても statusline 表示は止めない
+// JSON 保存と整形済みブロック生成
+// 失敗しても statusline 表示は止めない
 try {
   const data = JSON.parse(raw) as Record<string, unknown>
   const pd = projectDir(data)
@@ -40,7 +43,7 @@ try {
     writeAtomic(join(dir, `${owner}.txt`), buildStatusBlock(data, readBranch(pd)))
   }
 } catch (err) {
-  // 保存失敗は無視して表示を優先するが、DEBUG 設定時は診断を出す
+  // 保存失敗は無視して表示を優先するが DEBUG 設定時は診断を出す
   if (process.env.DISCORD_NOTIFY_DEBUG) {
     process.stderr.write(`[statusline-tee] save error: ${(err as Error).message}\n`)
   }
@@ -51,7 +54,7 @@ const cmd = process.argv[2]
 if (cmd) {
   const child = spawn(cmd, process.argv.slice(3), { stdio: ['pipe', 'inherit', 'inherit'] })
 
-  // ラップ先コマンドが見つからない場合(ENOENT)や他のエラーで tee が落ちるのを防ぐ
+  // ラップ先コマンドが見つからない場合 (ENOENT) や他のエラーで tee が落ちるのを防ぐ
   child.on('error', (err) => {
     process.stderr.write(`[statusline-tee] passthrough failed: ${(err as Error).message}\n`)
     process.exit(1)

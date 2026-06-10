@@ -1,4 +1,4 @@
-import { thinkingGist, toolSummary } from './summarize'
+import { thinkingGist, toolSummary, statusLine } from './summarize'
 import { sendNow, ownerName } from './notify'
 import { stateDir } from './routes'
 import { statSync, openSync, readSync, closeSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
@@ -45,6 +45,30 @@ export function extractMessages(line: string): string[] {
     // その他のブロックはスキップする
   }
   return results
+}
+
+// JSONL の1行から assistant の model と usage を取り出しステータスラインにする。
+// assistant 以外の行、model/usage 不在、parse 失敗は null を返す。
+export function extractStatus(line: string): string | null {
+  if (!line.trim()) return null
+  let rec: unknown
+  try { rec = JSON.parse(line) } catch { return null }
+  if (typeof rec !== 'object' || rec === null) return null
+  const r = rec as Record<string, unknown>
+  if (r.type !== 'assistant') return null
+  const msg = r.message
+  if (typeof msg !== 'object' || msg === null) return null
+  const m = msg as Record<string, unknown>
+  if (typeof m.model !== 'string') return null
+  if (typeof m.usage !== 'object' || m.usage === null) return null
+  return statusLine(m.model, m.usage as Record<string, unknown>)
+}
+
+// バッチに 💬 テキストが含まれる場合のみ末尾にステータスラインを足す。
+// ツールのみのバッチに毎回付けるとノイズになるため、発言の区切りに限定する。
+export function withStatus(messages: string[], status: string | null): string[] {
+  if (!status || !messages.some((m) => m.startsWith('💬'))) return messages
+  return [...messages, status]
 }
 
 // メッセージ配列を改行結合で maxLen 以下のチャンク列に詰める。
@@ -103,12 +127,16 @@ if (import.meta.main) {
       // 1 ポーリング分のメッセージを集めて 1 通の Discord メッセージにまとめる。
       // バッファ用タイマーは持たず、ポーリングサイクル自体が自然なまとめ単位になる。
       const messages: string[] = []
+      let status: string | null = null
       for (const line of lines) {
         for (const msg of extractMessages(line)) messages.push(msg)
+        // バッチ内で最後に観測した usage を文末ステータスに使う
+        const s = extractStatus(line)
+        if (s) status = s
       }
       if (messages.length > 0) {
         // 1900 字超のまとめ送信はチャンクに分割し、順序を保つため直列に送る
-        const chunks = packMessages(messages)
+        const chunks = packMessages(withStatus(messages, status))
         void (async () => { for (const c of chunks) await sendNow(c) })()
       }
     } catch (e) {

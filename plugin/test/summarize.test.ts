@@ -120,6 +120,14 @@ test('toolSummary は素の mcp サーバー名をそのまま使う', () => {
   expect(toolSummary('mcp__drawio__open_drawio_xml', {})).toBe('`⚙️[drawio:open_drawio_xml]`')
 })
 
+test('toolSummary はバッククォート密集で ZWSP 展開による超過を防ぐ', () => {
+  const backquoteCommand = '```'.repeat(620)
+  const result = toolSummary('Bash', { command: backquoteCommand })
+  const resultPoints = [...result]
+  expect(resultPoints.length).toBeLessThanOrEqual(1900)
+  expect(result.endsWith('\n```')).toBe(true)
+})
+
 test('toolSummary はバッククォートを含む本文をコードブロックに逃がす', () => {
   expect(toolSummary('Grep', { pattern: 'foo`bar' })).toBe('```\n⚙️[Grep]\nfoo`bar\n```')
 })
@@ -137,11 +145,12 @@ test('thinkingGist は空入力で空文字を返す', () => {
   expect(thinkingGist('')).toBe('')
 })
 
-test('thinkingGist は長文を上限内に収める', () => {
-  const g = thinkingGist('あ'.repeat(300))
-  expect(g.startsWith('🧠 ')).toBe(true)
-  expect(g.endsWith('…')).toBe(true)
-  expect(g.length).toBeLessThanOrEqual(200)
+test('thinkingGist は長文をコードポイント単位で196字に切り詰める', () => {
+  expect(thinkingGist('あ'.repeat(300))).toBe('🧠 ' + 'あ'.repeat(196) + '…')
+})
+
+test('thinkingGist は絵文字をコードポイント単位で196字に切り詰める', () => {
+  expect(thinkingGist('😀'.repeat(300))).toBe('🧠 ' + '😀'.repeat(196) + '…')
 })
 
 test('threadName は日時プレフィックスと本文でスレッド名を作る', () => {
@@ -162,6 +171,10 @@ test('threadName は80字ちょうどは切らない', () => {
 
 test('threadName は80字超の本文を79字と…に切り詰める', () => {
   expect(threadName('あ'.repeat(100), new Date(2026, 5, 1, 20, 13))).toBe('[06/01 20:13] ' + 'あ'.repeat(79) + '…')
+})
+
+test('threadName は絵文字をサロゲートペア単位で数えて切り詰める', () => {
+  expect(threadName('😀'.repeat(100), new Date(2026, 5, 1, 20, 13))).toBe('[06/01 20:13] ' + '😀'.repeat(79) + '…')
 })
 
 test('threadName は本文が空白のみなら progress にする', () => {

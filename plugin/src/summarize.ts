@@ -106,15 +106,6 @@ export function toolSummary(name: string, input: Record<string, unknown>, hideBo
   return code(`⚙️[${n}] ${body}`)
 }
 
-// 進捗バッチの文末に付けるステータスライン。モデル名とコンテキスト使用量を1行のコードブロックにする。
-// ctx は input + cache_read + cache_creation の合計で、直近 API 呼び出しに載せたコンテキスト全体を表す。
-export function statusLine(model: string, usage: Record<string, unknown>): string {
-  const num = (v: unknown) => (typeof v === 'number' ? v : 0)
-  const k = (n: number) => `${(n / 1000).toFixed(1)}k`
-  const ctx = num(usage.input_tokens) + num(usage.cache_read_input_tokens) + num(usage.cache_creation_input_tokens)
-  return `\`\`\`\n${model} | ctx ${k(ctx)} | out ${k(num(usage.output_tokens))}\n\`\`\``
-}
-
 // thinking の先頭1〜2文を要点として抽出(最大200字)。
 export function thinkingGist(text: string): string {
   const trimmed = text.trim().replace(/\s+/g, ' ')

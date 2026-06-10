@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { extractMessages, packMessages, extractStatus, withStatus } from '../src/watch'
+import { extractMessages, packMessages } from '../src/watch'
 
 test('thinking ブロックから要点を抽出する', () => {
   const line = '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"まず確認する。次に実装する。"}]}}'
@@ -78,33 +78,4 @@ test('packMessages は単一の巨大メッセージをそのまま1チャンク
 
 test('packMessages は空配列で空配列を返す', () => {
   expect(packMessages([], 10)).toEqual([])
-})
-
-test('extractStatus は assistant 行の model と usage からステータスラインを作る', () => {
-  const line = '{"type":"assistant","message":{"model":"claude-fable-5","usage":{"input_tokens":1,"cache_read_input_tokens":88000,"cache_creation_input_tokens":1141,"output_tokens":1931},"content":[]}}'
-  expect(extractStatus(line)).toBe('```\nclaude-fable-5 | ctx 89.1k | out 1.9k\n```')
-})
-
-test('extractStatus は非 assistant 行で null を返す', () => {
-  expect(extractStatus('{"type":"user","message":{"content":[]}}')).toBeNull()
-})
-
-test('extractStatus は usage の無い assistant 行で null を返す', () => {
-  expect(extractStatus('{"type":"assistant","message":{"model":"claude-fable-5","content":[]}}')).toBeNull()
-})
-
-test('extractStatus は不正な JSON 行で null を返す', () => {
-  expect(extractStatus('not json')).toBeNull()
-})
-
-test('withStatus は 💬 を含むバッチの末尾にステータスを足す', () => {
-  expect(withStatus(['💬 完了', '`⚙️[Bash]`'], 'S')).toEqual(['💬 完了', '`⚙️[Bash]`', 'S'])
-})
-
-test('withStatus は 💬 の無いバッチには足さない', () => {
-  expect(withStatus(['`⚙️[Bash]`'], 'S')).toEqual(['`⚙️[Bash]`'])
-})
-
-test('withStatus はステータス null なら何もしない', () => {
-  expect(withStatus(['💬 完了'], null)).toEqual(['💬 完了'])
 })

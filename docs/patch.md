@@ -430,3 +430,63 @@ Discord API はメッセージ content 全体から mention を解析して ping
 
 - `docs/discord-text-formatting.md` の調査記録
 - `plugin/src/notify.ts` の `postMessage` (watch 経路の同対処)
+
+---
+
+## パッチ E: reply 末尾のステータスブロック付与
+
+### 背景・目的
+
+リプライメッセージの末尾に「ブランチ名 / モデル名+effort / ctx%+5h+7d リミット」の
+3行ステータスをコードブロックで表示する。データ源は Claude Code が statusLine コマンドへ
+渡す stdin JSON (rate_limits と context_window はここにしかない)。
+`statusline-tee.ts` (settings.json の statusLine で本来のコマンドをラップ) が
+`stateDir/statusline/<owner>.txt` に整形済みブロックを書き、server.ts はそれを読んで
+reply 末尾に連結するだけにする。揮発する patch 面積を最小化し、整形ロジックは
+`<repo>/plugin/src/status.ts` (テスト付き) に置く。
+
+### 変更箇所 (2 箇所)
+
+#### 1. ヘルパーの追加 (`let ownedChannelId: string | null = null` の直後)
+
+```ts
+// --- Reply status footer (cc-discord パッチ E) ---
+// statusline-tee.ts (<repo>) が stateDir/statusline/<owner>.txt に書く
+// 整形済みステータスブロックを reply 末尾に付ける。ファイルが無い、または10分より
+// 古い(セッション非アクティブ)場合は付けない。失敗しても reply 本体は止めない。
+function replyStatusFooter(): string | null {
+  try {
+    if (!OWNER_NAME) return null
+    const f = join(STATE_DIR, 'statusline', `${OWNER_NAME}.txt`)
+    if (Date.now() - statSync(f).mtimeMs > 10 * 60 * 1000) return null
+    const t = readFileSync(f, 'utf8').trim()
+    return t || null
+  } catch { return null }
+}
+```
+
+#### 2. reply ツールのチャンク化 (`case 'reply'` 内)
+
+`const chunks = chunk(text, limit, mode)` を以下に置き換える:
+
+```ts
+        // cc-discord パッチ E: リプライ末尾にステータスブロックを付ける
+        const footer = replyStatusFooter()
+        const chunks = chunk(footer ? `${text}\n${footer}` : text, limit, mode)
+```
+
+### 注意すべきポイント
+
+- **settings.json 側の前提**: `statusLine.command` が
+  `bun <repo>/plugin/src/statusline-tee.ts uv run ~/.claude/scripts/statusline.py --icons=nerd`
+  になっていること (tee がラップ)。tee を外すと .txt が更新されなくなり、10分で footer は自然消滅する。
+- **owner 単位の last-writer-wins**: 同一プロジェクトでセッションが並走すると最後に statusline を
+  描画したセッションの値になる。reply する瞬間は自セッションがアクティブなため実用上は一致する。
+- statusline はアクティブなインタラクティブセッションでしか描画されない。headless 等では footer なし。
+- **反映には全セッションの再起動が必要** (server.ts はセッション毎に常駐するため)。
+- **plugin 更新で消える**: 新バージョンの `server.ts` に再適用する。
+
+### 関連
+
+- `plugin/src/status.ts` (整形ロジック本体、`plugin/test/status.test.ts` でテスト)
+- `plugin/src/statusline-tee.ts` (statusline JSON の捕捉と .txt 生成)

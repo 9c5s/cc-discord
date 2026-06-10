@@ -51,20 +51,20 @@ function pickDetail(input: Record<string, unknown>): { key: string; value: strin
 }
 
 // tool_input から代表的な引数を1つ選び、絵文字とツール名と本文をまとめてコード整形する。
-// どのキーも `⚙️ ツール名 補足` の空白区切り1行(`⚙️ Edit watch.ts` / `⚙️ Agent ログ調査`)とするが、
+// どのキーも `⚙️ [ツール名] 補足` の空白区切り1行(`⚙️ [Edit] watch.ts` / `⚙️ [Agent] ログ調査`)とするが、
 // command と改行入り・100字超の本文はツール名の後で改行しコードブロックにする。
 // 100字を超える本文は100字で切り捨て … を付ける。hideBody が true なら本文を出さずツール名のみにする。
 export function toolSummary(name: string, input: Record<string, unknown>, hideBody = false): string {
-  if (hideBody) return code(`⚙️ ${name}`)
+  if (hideBody) return code(`⚙️ [${name}]`)
   const fp = input.file_path ?? input.notebook_path ?? input.scriptPath
-  if (typeof fp === 'string') return code(`⚙️ ${name} ${fileName(fp)}`)
+  if (typeof fp === 'string') return code(`⚙️ [${name}] ${fileName(fp)}`)
   const detail = pickDetail(input)
-  if (!detail) return code(`⚙️ ${name}`)
+  if (!detail) return code(`⚙️ [${name}]`)
   const body = truncate(detail.value)
   if (detail.key === 'command' || body !== detail.value || body.includes('\n')) {
-    return code(`⚙️ ${name}\n${body}`)
+    return code(`⚙️ [${name}]\n${body}`)
   }
-  return code(`⚙️ ${name} ${body}`)
+  return code(`⚙️ [${name}] ${body}`)
 }
 
 // thinking の先頭1〜2文を要点として抽出(最大200字)。

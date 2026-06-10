@@ -1,11 +1,12 @@
-import { thinkingGist, toolSummary } from './summarize'
-import { sendNow, ownerName } from './notify'
+import { thinkingGist, toolSummary, truncate } from './summarize'
+import { sendNow, ownerName, debugLog } from './notify'
 import { stateDir } from './routes'
-import { statSync, openSync, readSync, closeSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
+import { statSync, openSync, readSync, closeSync, existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'fs'
 import { join } from 'path'
+import { execFileSync } from 'child_process'
 
-// JSONL の1行から転送すべきメッセージ配列を返す純粋関数
-// 空行・parse 失敗・非 assistant 行・content が配列でない場合は空配列を返す
+// JSONL の1行から転送すべきメッセージ配列を返す純粋関数。
+// 空行・parse 失敗・非 assistant 行・content が配列でない場合は空配列を返す。
 export function extractMessages(line: string): string[] {
   if (!line.trim()) return []
   let rec: unknown
@@ -34,7 +35,8 @@ export function extractMessages(line: string): string[] {
       if (!t) continue
       // resume 時に Claude が出す定型応答は Discord に流さない
       if (t === 'No response requested.') continue
-      results.push('💬 ' + t.slice(0, 1800))
+      // タスクF: truncate でコードポイント単位に 1800 字で切り詰める
+      results.push('💬 ' + truncate(t, 1800))
     } else if (b.type === 'tool_use' && typeof b.name === 'string') {
       // tool_use も transcript から拾って同一経路で送る。PreToolUse hook 経由の即時送信は
       // assistant message の transcript 書き込みより早く発火するため text と並びが逆転する。
@@ -66,8 +68,17 @@ export function packMessages(messages: string[], maxLen = 1900): string[] {
   return chunks
 }
 
-// このファイルが直接実行された場合のみ常駐ループを起動する
-// テストからインポートされた場合は実行しない
+// タスクG: 行分割ロジックを純粋関数に抽出する。
+// carry と読み取りチャンクを結合し改行で分割する。未完の最終行を次回へ持ち越す。
+export function splitLines(carry: string, chunk: string): { lines: string[]; carry: string } {
+  const combined = carry + chunk
+  const parts = combined.split('\n')
+  const newCarry = parts.pop() ?? ''
+  return { lines: parts, carry: newCarry }
+}
+
+// このファイルが直接実行された場合のみ常駐ループを起動する。
+// テストからインポートされた場合は実行しない。
 if (import.meta.main) {
   const transcriptPath = process.argv[2]
   // owner 未解決(routing 対象外)または transcript_path 引数なしなら即終了する。
@@ -81,6 +92,11 @@ if (import.meta.main) {
   let offset = existsSync(transcriptPath) ? statSync(transcriptPath).size : 0
   let carry = ''
 
+  // タスクD: 全サイクル横断の単一送信チェーン。
+  // 同一ポーリングサイクル内だけでなく、サイクル間も直列化して Discord の表示順を保証する。
+  // catch の後も次の then が動くことでチェーンが壊れないよう設計する。
+  let sendChain: Promise<void> = Promise.resolve()
+
   // transcript JSONL を 250ms ごとにポーリングし新規行を処理する
   function poll() {
     try {
@@ -89,54 +105,100 @@ if (import.meta.main) {
       if (size < offset) { offset = 0; carry = '' } // ローテーション/truncate を検出しリセット
       if (size === offset) return
       const fd = openSync(transcriptPath, 'r')
+      let chunk = ''
       try {
         const buf = Buffer.alloc(size - offset)
         readSync(fd, buf, 0, buf.length, offset)
         offset = size
-        carry += buf.toString('utf8')
+        chunk = buf.toString('utf8')
       } finally {
         // readSync が throw しても fd を確実に閉じてリークを防ぐ
         closeSync(fd)
       }
-      const lines = carry.split('\n')
-      carry = lines.pop() ?? '' // 未完行は次回へ持ち越す
-      // 1 ポーリング分のメッセージを集めて 1 通の Discord メッセージにまとめる。
-      // バッファ用タイマーは持たず、ポーリングサイクル自体が自然なまとめ単位になる。
+      // タスクG: 純粋関数 splitLines で行分割する
+      const result = splitLines(carry, chunk)
+      carry = result.carry
+      const lines = result.lines
+
+      // タスクH: 抽出件数を DEBUG で可視化する(transcript フォーマット変更による全行 parse 失敗の検知手段)
       const messages: string[] = []
       for (const line of lines) {
         for (const msg of extractMessages(line)) messages.push(msg)
       }
       if (messages.length > 0) {
-        // 1900 字超のまとめ送信はチャンクに分割し、順序を保つため直列に送る
+        debugLog(`poll: ${lines.length} lines -> ${messages.length} msgs`)
         const chunks = packMessages(messages)
-        void (async () => { for (const c of chunks) await sendNow(c) })()
+        // タスクD: 全サイクル横断で直列化する。
+        // sendChain に then で繋ぐことで前サイクルの送信完了後に次サイクルの送信が始まる。
+        // catch で rejection を捕捉して debugLog に出すことでチェーンが壊れず常駐が継続する。
+        sendChain = sendChain
+          .then(async () => { for (const c of chunks) await sendNow(c) })
+          .catch((e) => debugLog(`send failed: ${e}`))
       }
     } catch (e) {
-      // セッションは止めない。DEBUG 時のみ stderr に出す
-      if (process.env.DISCORD_NOTIFY_DEBUG) process.stderr.write(`[watch] ${e}\n`)
+      // セッションは止めない。DEBUG 時のみログに出す
+      debugLog(`[watch] ${e}`)
     }
   }
 
-  // PID ファイルで孤児プロセスを掃除する
-  // 同じオーナーの前回 watch が残っていれば SIGTERM で終了させ、自分の PID を書き込む
+  // タスクE: PID 機構強化 ---
+  // PID ファイルで孤児プロセスを掃除する。
+  // 同じオーナーの前回 watch が残っていれば SIGTERM で終了させ、自分の PID を書き込む。
   const pidFile = join(stateDir(), 'watch-' + ownerName() + '.pid')
+  try {
+    // stateDir が未作成の環境では pidFile の書き込みが無音で失敗する。
+    // 書き込み前に stateDir を作成して多重起動防止が無効化される問題を防ぐ。
+    mkdirSync(stateDir(), { recursive: true, mode: 0o700 })
+  } catch (e) {
+    debugLog(`[watch] mkdirSync stateDir failed: ${e}`)
+  }
   try {
     if (existsSync(pidFile)) {
       const oldPid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10)
       if (!isNaN(oldPid) && oldPid !== process.pid) {
-        try { process.kill(oldPid, 'SIGTERM') } catch { /* 既に終了済み or 権限なしは無視する */ }
+        // タスクE: Windows では tasklist で PID が bun プロセスか確認してから SIGTERM を送る。
+        // 無関係プロセスの誤殺を防止する。
+        // POSIX では kill(PID, 0) で存在確認が可能だが、ここでは従来どおり直接 kill する。
+        if (process.platform === 'win32') {
+          let isBun = false
+          try {
+            const out = execFileSync('tasklist', ['/FI', `PID eq ${oldPid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', timeout: 3000 })
+            isBun = out.toLowerCase().includes('bun')
+          } catch {
+            // tasklist 実行失敗は kill しない方向に倒す
+          }
+          if (isBun) {
+            try { process.kill(oldPid, 'SIGTERM') } catch { /* 既に終了済み or 権限なしは無視する */ }
+          }
+        } else {
+          // POSIX: プロセス存在確認は OS に委ねて直接 kill する
+          try { process.kill(oldPid, 'SIGTERM') } catch { /* 既に終了済み or 権限なしは無視する */ }
+        }
       }
     }
   } catch { /* PID ファイル読み取りエラーは無視する */ }
-  try { writeFileSync(pidFile, String(process.pid), { encoding: 'utf8', mode: 0o600 }) } catch { /* 書き込み失敗は無視する */ }
+  try {
+    writeFileSync(pidFile, String(process.pid), { encoding: 'utf8', mode: 0o600 })
+  } catch (e) {
+    debugLog(`[watch] pidFile write failed: ${e}`)
+  }
 
   // 250ms: 知覚的に即時、CPU/API レート制限とも余裕(statSync 約1ms を 4回/秒)。
   // これより短くするなら fs.watch への切替を検討する。
   const interval = setInterval(poll, 250)
-  // interval.unref() を呼ばない — イベントループを保持して常駐する
+  // interval.unref() を呼ばない -- イベントループを保持して常駐する
+
+  // タスクE: SIGTERM ハンドラ。
+  // 注: Windows では process.kill が TerminateProcess 相当であり SIGTERM ハンドラは発火しない。
+  // このハンドラは POSIX 専用のクリーンアップである。
   process.on('SIGTERM', () => {
     clearInterval(interval)
-    try { unlinkSync(pidFile) } catch { /* 削除失敗は無視する */ }
+    // タスクE: pidFile を読み直して中身が自分の PID と一致するときのみ削除する。
+    // 世代跨ぎで新 watch の pidFile を消す race を防ぐ。
+    try {
+      const current = readFileSync(pidFile, 'utf8').trim()
+      if (current === String(process.pid)) unlinkSync(pidFile)
+    } catch { /* 削除失敗は無視する */ }
     process.exit(0)
   })
   // process.stdin.on('close', ...) は削除する

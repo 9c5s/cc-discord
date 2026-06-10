@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { extractMessages, packMessages } from '../src/watch'
+import { extractMessages, packMessages, splitLines } from '../src/watch'
 
 test('thinking ブロックから要点を抽出する', () => {
   const line = '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"まず確認する。次に実装する。"}]}}'
@@ -78,4 +78,38 @@ test('packMessages は単一の巨大メッセージをそのまま1チャンク
 
 test('packMessages は空配列で空配列を返す', () => {
   expect(packMessages([], 10)).toEqual([])
+})
+
+// タスクF: 1800 コードポイント超の text が切り詰められ ... が付くテスト
+test('1800 コードポイント超の text は切り詰めて ... を付ける', () => {
+  const longText = 'あ'.repeat(1801)
+  const line = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: longText }] } })
+  expect(extractMessages(line)).toEqual(['💬 ' + 'あ'.repeat(1800) + '…'])
+})
+
+test('1800 コードポイント以下の text はそのまま通す', () => {
+  const text = 'あ'.repeat(1800)
+  const line = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: text }] } })
+  expect(extractMessages(line)).toEqual(['💬 ' + 'あ'.repeat(1800)])
+})
+
+// タスクG: splitLines のテスト
+test('splitLines: 未完行は carry に持ち越す', () => {
+  expect(splitLines('', 'abc\ndef')).toEqual({ lines: ['abc'], carry: 'def' })
+})
+
+test('splitLines: 複数行を正しく分割する', () => {
+  expect(splitLines('', 'line1\nline2\nline3')).toEqual({ lines: ['line1', 'line2'], carry: 'line3' })
+})
+
+test('splitLines: 改行で終わるチャンクは carry が空文字になる', () => {
+  expect(splitLines('', 'line1\nline2\n')).toEqual({ lines: ['line1', 'line2'], carry: '' })
+})
+
+test('splitLines: 空チャンクは carry をそのまま返す', () => {
+  expect(splitLines('prev', '')).toEqual({ lines: [], carry: 'prev' })
+})
+
+test('splitLines: carry と chunk を結合して分割する', () => {
+  expect(splitLines('hel', 'lo\nworld')).toEqual({ lines: ['hello'], carry: 'world' })
 })

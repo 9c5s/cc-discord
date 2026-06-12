@@ -28,7 +28,13 @@ if (tp && owner) {
       if (out.toLowerCase().includes(basename(tp).toLowerCase())) {
         try { process.kill(pid, 'SIGTERM') } catch { /* 既に終了済みは無視する */ }
         // Windows では watcher 側の SIGTERM ハンドラが走らないため pidFile をここで掃除する
-        try { unlinkSync(pidFile) } catch { /* 削除失敗は無視する */ }
+        // POSIX は watcher 自身が中身一致を確認して削除するため触らない
+        // 新しい watcher が書き直した pidFile を消さないよう 中身が kill 対象の PID のままのときだけ削除する
+        if (process.platform === 'win32') {
+          try {
+            if (readFileSync(pidFile, 'utf8').trim() === String(pid)) unlinkSync(pidFile)
+          } catch { /* 読み取りや削除の失敗は無視する */ }
+        }
       }
     }
   } catch { /* pidFile 不在やプロセス確認失敗は何もしない */ }

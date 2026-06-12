@@ -25,9 +25,11 @@ function projectDir(data: Record<string, unknown>): string {
 
 
 // 同時読み取りに壊れたファイルを見せないため一時ファイル経由で置き換える
+// 同じ owner の tee が並走しても衝突しないよう一時名に PID を含める
 function writeAtomic(path: string, content: string): void {
-  writeFileSync(path + '.tmp', content, { encoding: 'utf8', mode: 0o600 })
-  renameSync(path + '.tmp', path)
+  const tmp = `${path}.${process.pid}.tmp`
+  writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 })
+  renameSync(tmp, path)
 }
 
 // JSON 保存と整形済みブロック生成

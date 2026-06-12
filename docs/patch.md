@@ -180,24 +180,26 @@ let ownedChannelId: string | null = null
 これを非同期ハンドラに変更し、担当チャンネルを解決して routes ファイルに書き込む処理を追加した:
 
 ```typescript
-client.once('ready', async c => {
-  process.stderr.write(`discord channel: gateway connected as ${c.user.tag}\n`)
-  if (!OWNER_NAME) {
-    process.stderr.write('discord channel: CLAUDE_PROJECT_DIR unset — routing disabled (handling all)\n')
-    return
-  }
+// 担当チャンネルの解決処理. ready 時と定期再解決の両方から呼ぶ
+// access.json への許可追加やチャンネル改名を再起動なしで反映するため 60 秒毎に再評価し
+// 結果が変化したときだけログと route 更新を行う
+let lastResolvedChannelId: string | null | undefined
+function resolveOwnedChannel(c: any): void {
   // guild チャンネルから正規化名一致を探す
   // 同名のカテゴリ/ボイス/フォーラム/スレッドを誤って担当にしないよう guild テキストチャンネルに限定する
   // さらに access.json で許可済み (groups 登録済み) のチャンネルに限定する
   // 進捗送信 (watch/notify) は gate を通らず REST で直接投稿するため ここで許可リストを
   // 強制しないと 同名の未許可チャンネルへセッション内容が流出しうる
-  const bootAccess = loadAccess()
+  const access = loadAccess()
   const matches = c.channels.cache.filter(
-    ch => ch.type === ChannelType.GuildText && (ch.id in bootAccess.groups) && 'name' in ch && typeof (ch as any).name === 'string' && normalizeName((ch as any).name) === OWNER_NAME,
+    (ch: any) => ch.type === ChannelType.GuildText && (ch.id in access.groups) && 'name' in ch && typeof ch.name === 'string' && normalizeName(ch.name) === OWNER_NAME,
   )
   const first = matches.first()
+  const resolved = first ? first.id : null
+  if (resolved === lastResolvedChannelId) return
+  lastResolvedChannelId = resolved
+  ownedChannelId = resolved
   if (first) {
-    ownedChannelId = first.id
     // routes/<OWNER_NAME> に担当チャンネルIDを書く(hook/監視が読む)
     try {
       const rdir = join(STATE_DIR, 'routes')
@@ -206,7 +208,7 @@ client.once('ready', async c => {
     } catch (err) {
       process.stderr.write(`discord channel: failed to write route: ${err}\n`)
     }
-    process.stderr.write(`discord channel: routing to #${(first as any).name} (${first.id}); DM=${OWNS_DM}\n`)
+    process.stderr.write(`discord channel: routing to #${first.name} (${first.id}); DM=${OWNS_DM}\n`)
   } else {
     // 一致チャンネルが無い場合は前回実行の stale な route を削除する
     // 残すと改名/削除後も watch/notify が旧チャンネル ID へ進捗を投稿し続ける
@@ -215,6 +217,18 @@ client.once('ready', async c => {
     try { rmSync(join(STATE_DIR, 'progress-thread', OWNER_NAME), { force: true }) } catch { /* 削除失敗は無視する */ }
     process.stderr.write(`discord channel: no channel named '${OWNER_NAME}' — guild routing off (DM=${OWNS_DM})\n`)
   }
+}
+
+client.once('ready', async c => {
+  process.stderr.write(`discord channel: gateway connected as ${c.user.tag}\n`)
+  if (!OWNER_NAME) {
+    process.stderr.write('discord channel: CLAUDE_PROJECT_DIR unset — routing disabled (handling all)\n')
+    return
+  }
+  resolveOwnedChannel(c)
+  // /discord:access による許可追加やチャンネル改名を再起動なしで拾うための定期再解決
+  const timer = setInterval(() => resolveOwnedChannel(c), 60_000)
+  ;(timer as any).unref?.()
 })
 ```
 
@@ -491,8 +505,18 @@ function replyStatusFooter(): string | null {
 
 ```ts
         // cc-discord パッチ E: リプライ末尾にステータスブロックを付ける
+        // チャンカーが footer のコードフェンスを分断しないよう本文だけを chunk し
+        // footer は末尾チャンクに収まるなら結合 収まらなければ独立チャンクとして送る
         const footer = replyStatusFooter()
-        const chunks = chunk(footer ? `${text}\n${footer}` : text, limit, mode)
+        const chunks = chunk(text, limit, mode)
+        if (footer) {
+          const lastChunk = chunks[chunks.length - 1]
+          if (lastChunk !== undefined && lastChunk.length + 1 + footer.length <= limit) {
+            chunks[chunks.length - 1] = `${lastChunk}\n${footer}`
+          } else {
+            chunks.push(footer)
+          }
+        }
 ```
 
 ### 注意すべきポイント

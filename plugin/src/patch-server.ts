@@ -55,9 +55,10 @@ function gitApply(dir: string, patchPath: string, args: string[]): { ok: boolean
 }
 
 // 適用後の server.ts がトランスパイル可能か bun build で検証する
+// --external '*' で依存解決をスキップし構文だけを見る (node_modules の有無に依存させない)
 function bunBuildOk(dir: string): boolean {
   const out = join(dir, `.patch-verify-${process.pid}.tmp.js`)
-  const r = spawnSync('bun', ['build', 'server.ts', '--target', 'node', '--outfile', out], {
+  const r = spawnSync('bun', ['build', 'server.ts', '--target', 'node', '--external', '*', '--outfile', out], {
     cwd: dir, stdio: 'pipe',
   })
   try { rmSync(out, { force: true }) } catch { /* 一時ファイルの削除失敗は無害 */ }
@@ -91,6 +92,9 @@ function apply(): void {
   // チェック通過済みなので現物は素 これを .orig として保全し --make の基準にする
   const orig = `${serverTs}.orig`
   if (!existsSync(orig)) copyFileSync(serverTs, orig)
+  // 検証失敗時の復元先は .orig でなく適用直前の内容にする
+  // 同版再配布や手動修正で .orig が現物より古い場合に適用前の状態を失わないため
+  const before = readFileSync(serverTs, 'utf8')
   const applied = gitApply(dir, patchPath, [])
   if (!applied.ok) {
     fail(
@@ -98,9 +102,9 @@ function apply(): void {
       `  中途半端な状態になった場合は server.ts.orig から復元できる`,
     )
   }
-  // 構文検証に失敗したら素に戻し 壊れた server.ts を残さない
+  // 構文検証に失敗したら適用前の状態に戻し 壊れた server.ts を残さない
   if (!bunBuildOk(dir)) {
-    copyFileSync(orig, serverTs)
+    writeFileSync(serverTs, before, 'utf8')
     fail('適用後の bun build が失敗したため復元した パッチ内容を確認すること')
   }
   // フォールバックで当たった場合はこのバージョンで検証済みの patch として保存する

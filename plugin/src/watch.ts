@@ -4,6 +4,7 @@ import { stateDir } from './routes'
 import { statSync, openSync, readSync, closeSync, existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { execFileSync } from 'child_process'
+import { StringDecoder } from 'string_decoder'
 
 // JSONL の1行から転送すべきメッセージ配列を返す純粋関数
 // 空行/parse 失敗/非 assistant 行/content が配列でない場合は空配列を返す
@@ -96,6 +97,9 @@ if (import.meta.main) {
   // 既存分はスキップし 以降の新規行を追う
   let offset = existsSync(transcriptPath) ? statSync(transcriptPath).size : 0
   let carry = ''
+  // 読取境界が UTF-8 マルチバイト列の途中に落ちても化けないよう
+  // ポーリングを跨いで部分バイト列を保持する decoder を使う
+  let decoder = new StringDecoder('utf8')
 
   // 全サイクル横断の単一送信チェーン
   // 同一ポーリングサイクル内だけでなく サイクル間も直列化して Discord の表示順を保証する
@@ -107,7 +111,8 @@ if (import.meta.main) {
     try {
       if (!existsSync(transcriptPath)) return
       const size = statSync(transcriptPath).size
-      if (size < offset) { offset = 0; carry = '' } // ローテーション/truncate を検出しリセット
+      // ローテーション/truncate を検出したら読取状態と decoder の部分バイトを破棄する
+      if (size < offset) { offset = 0; carry = ''; decoder = new StringDecoder('utf8') }
       if (size === offset) return
       const fd = openSync(transcriptPath, 'r')
       let chunk = ''
@@ -117,7 +122,8 @@ if (import.meta.main) {
         const buf = Buffer.alloc(size - offset)
         const bytesRead = readSync(fd, buf, 0, buf.length, offset)
         offset += bytesRead
-        chunk = buf.subarray(0, bytesRead).toString('utf8')
+        // decoder.write はマルチバイト途中の末尾バイトを内部に保持し次回へ繋ぐ
+        chunk = decoder.write(buf.subarray(0, bytesRead))
       } finally {
         // readSync が throw しても fd を確実に閉じてリークを防ぐ
         closeSync(fd)
@@ -156,15 +162,16 @@ if (import.meta.main) {
   // 最後に起動したセッションだけが進捗転送され 先発セッションの転送は引き継ぎで停止する
   const pidFile = join(stateDir(), 'watch-' + ownerName() + '.pid')
 
-  // PID が bun プロセスかを OS コマンドで確認する
-  // pidFile 残留と PID 再利用が重なった場合に無関係なプロセスを誤殺しないための検証である
+  // PID が watch.ts を実行中のプロセスかをコマンドラインで確認する
+  // 実行ファイル名 (bun) だけの判定では PID 再利用先が別用途の bun だった場合に誤殺するため
+  // コマンドライン引数に watch.ts が含まれることまで検証する
   // 確認に失敗した場合 (プロセス不在を含む) は false を返し kill しない方向に倒す
-  function isBunProcess(pid: number): boolean {
+  function isWatchProcess(pid: number): boolean {
     try {
       const out = process.platform === 'win32'
-        ? execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', timeout: 3000 })
-        : execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8', timeout: 3000 })
-      return out.toLowerCase().includes('bun')
+        ? execFileSync('wmic', ['process', 'where', `processid=${pid}`, 'get', 'commandline', '/value'], { encoding: 'utf8', timeout: 3000 })
+        : execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8', timeout: 3000 })
+      return out.toLowerCase().includes('watch.ts')
     } catch {
       return false
     }
@@ -179,7 +186,7 @@ if (import.meta.main) {
   try {
     if (existsSync(pidFile)) {
       const oldPid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10)
-      if (!isNaN(oldPid) && oldPid !== process.pid && isBunProcess(oldPid)) {
+      if (!isNaN(oldPid) && oldPid !== process.pid && isWatchProcess(oldPid)) {
         try { process.kill(oldPid, 'SIGTERM') } catch { /* 既に終了済み or 権限なしは無視する */ }
       }
     }
@@ -189,6 +196,21 @@ if (import.meta.main) {
   } catch (e) {
     debugLog(`[watch] pidFile write failed: ${e}`)
   }
+
+  // 同時起動の競合対策 (takeover 方式の補完)
+  // pidFile の獲得は read-then-write で原子的でないため ほぼ同時に起動した 2 プロセスが
+  // どちらも生き残り重複送信する余地がある
+  // wx 排他は「最後に起動したセッションが引き継ぐ」設計と逆の優先順位になるため採らず
+  // 書き込みから少し置いて pidFile を読み直し 自分以外の PID なら新しい watch に譲って退出する
+  // (1.5 秒より遅れて起動した競合相手はコマンドライン検証付きの SIGTERM 経路で自分を終了させる)
+  setTimeout(() => {
+    try {
+      if (readFileSync(pidFile, 'utf8').trim() !== String(process.pid)) {
+        debugLog('[watch] superseded by a newer watcher, exiting')
+        process.exit(0)
+      }
+    } catch { /* 読めない場合は継続する */ }
+  }, 1500)
 
   // 250ms: 知覚的に即時 CPU/API レート制限とも余裕 (statSync 約1ms を 4回/秒)
   // これより短くするなら fs.watch への切替を検討する

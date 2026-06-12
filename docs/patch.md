@@ -202,6 +202,9 @@ function resolveOwnedChannel(c: any): void {
   if (resolved === lastResolvedChannelId) return
   lastResolvedChannelId = resolved
   ownedChannelId = resolved
+  // 解決先が変わったら古い progress-thread を破棄する
+  // notify は progress-thread を route より先に読むため 残すと旧スレッドへ進捗が流れ続ける
+  try { rmSync(join(STATE_DIR, 'progress-thread', OWNER_NAME), { force: true }) } catch { /* 削除失敗は無視する */ }
   if (first) {
     // routes/<OWNER_NAME> に担当チャンネルIDを書く(hook/監視が読む)
     try {
@@ -216,8 +219,6 @@ function resolveOwnedChannel(c: any): void {
     // 一致チャンネルが無い場合は前回実行の stale な route を削除する
     // 残すと改名/削除後も watch/notify が旧チャンネル ID へ進捗を投稿し続ける
     try { rmSync(join(STATE_DIR, 'routes', OWNER_NAME), { force: true }) } catch { /* 削除失敗は無視する */ }
-    // progress-thread も独立した送信先として残るため 同じ理由で削除する
-    try { rmSync(join(STATE_DIR, 'progress-thread', OWNER_NAME), { force: true }) } catch { /* 削除失敗は無視する */ }
     process.stderr.write(`discord channel: no channel named '${OWNER_NAME}' — guild routing off (DM=${OWNS_DM})\n`)
   }
 }

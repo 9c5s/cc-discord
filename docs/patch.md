@@ -187,8 +187,9 @@ client.once('ready', async c => {
     return
   }
   // guild チャンネルから正規化名一致を探す
+  // 同名のカテゴリ/ボイス/フォーラム/スレッドを誤って担当にしないよう guild テキストチャンネルに限定する
   const matches = c.channels.cache.filter(
-    ch => 'name' in ch && typeof (ch as any).name === 'string' && normalizeName((ch as any).name) === OWNER_NAME,
+    ch => ch.type === ChannelType.GuildText && 'name' in ch && typeof (ch as any).name === 'string' && normalizeName((ch as any).name) === OWNER_NAME,
   )
   const first = matches.first()
   if (first) {

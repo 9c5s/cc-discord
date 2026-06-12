@@ -153,6 +153,20 @@ if (import.meta.main) {
   // 同一プロジェクトでセッションが並走した場合は
   // 最後に起動したセッションだけが進捗転送され 先発セッションの転送は引き継ぎで停止する
   const pidFile = join(stateDir(), 'watch-' + ownerName() + '.pid')
+
+  // PID が bun プロセスかを OS コマンドで確認する
+  // pidFile 残留と PID 再利用が重なった場合に無関係なプロセスを誤殺しないための検証である
+  // 確認に失敗した場合 (プロセス不在を含む) は false を返し kill しない方向に倒す
+  function isBunProcess(pid: number): boolean {
+    try {
+      const out = process.platform === 'win32'
+        ? execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', timeout: 3000 })
+        : execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8', timeout: 3000 })
+      return out.toLowerCase().includes('bun')
+    } catch {
+      return false
+    }
+  }
   try {
     // stateDir が未作成の環境では pidFile の書き込みが無音で失敗する
     // 書き込み前に stateDir を作成して多重起動防止が無効化される問題を防ぐ
@@ -163,25 +177,8 @@ if (import.meta.main) {
   try {
     if (existsSync(pidFile)) {
       const oldPid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10)
-      if (!isNaN(oldPid) && oldPid !== process.pid) {
-        // Windows では tasklist で PID が bun プロセスか確認してから SIGTERM を送る
-        // 無関係プロセスの誤殺を防止する
-        // POSIX では kill(PID, 0) で存在確認が可能だが ここでは従来どおり直接 kill する
-        if (process.platform === 'win32') {
-          let isBun = false
-          try {
-            const out = execFileSync('tasklist', ['/FI', `PID eq ${oldPid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', timeout: 3000 })
-            isBun = out.toLowerCase().includes('bun')
-          } catch {
-            // tasklist 実行失敗は kill しない方向に倒す
-          }
-          if (isBun) {
-            try { process.kill(oldPid, 'SIGTERM') } catch { /* 既に終了済み or 権限なしは無視する */ }
-          }
-        } else {
-          // POSIX: プロセス存在確認は OS に委ねて直接 kill する
-          try { process.kill(oldPid, 'SIGTERM') } catch { /* 既に終了済み or 権限なしは無視する */ }
-        }
+      if (!isNaN(oldPid) && oldPid !== process.pid && isBunProcess(oldPid)) {
+        try { process.kill(oldPid, 'SIGTERM') } catch { /* 既に終了済み or 権限なしは無視する */ }
       }
     }
   } catch { /* PID ファイル読み取りエラーは無視する */ }

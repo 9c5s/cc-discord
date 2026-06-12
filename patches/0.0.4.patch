@@ -1,0 +1,323 @@
+diff --git a/server.ts b/server.ts
+index 0595fc7..6295d5f 100644
+--- a/server.ts
++++ b/server.ts
+@@ -63,6 +63,35 @@ if (!TOKEN) {
+ }
+ const INBOX_DIR = join(STATE_DIR, 'inbox')
+ 
++// --- Multi-session routing (Task #2) ---
++// 起動ディレクトリ名を正規化 CLAUDE_PROJECT_DIR は MCP server 環境に設定される
++function normalizeName(input: string): string {
++  return input.toLowerCase().replace(/[\s_]+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '')
++}
++const PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR ?? ''
++const OWNER_NAME = PROJECT_DIR ? normalizeName(PROJECT_DIR.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '') : ''
++// PROJECT_DIR が設定されているのに正規化名が空になる場合 (日本語のみのディレクトリ名等) は
++// ルーティング不能として fail closed で全 inbound を drop する (全件処理への退行を防ぐ)
++const ROUTING_BROKEN = PROJECT_DIR !== '' && OWNER_NAME === ''
++// DM を担当するのは正規化名が 'cc-discord' のセッション
++const OWNS_DM = OWNER_NAME === 'cc-discord'
++// ready 後に解決する担当 guild チャンネルID(なければ null)
++let ownedChannelId: string | null = null
++
++// --- Reply status footer (cc-discord パッチ E) ---
++// statusline-tee.ts (cc-discord リポジトリ) が stateDir/statusline/<owner>.txt に書く
++// 整形済みステータスブロックを reply 末尾に付ける ファイルが無い場合や10分より
++// 古い(セッション非アクティブ)場合は付けない 失敗しても reply 本体は止めない
++function replyStatusFooter(): string | null {
++  try {
++    if (!OWNER_NAME) return null
++    const f = join(STATE_DIR, 'statusline', `${OWNER_NAME}.txt`)
++    if (Date.now() - statSync(f).mtimeMs > 10 * 60 * 1000) return null
++    const t = readFileSync(f, 'utf8').trim()
++    return t || null
++  } catch { return null }
++}
++
+ // Last-resort safety net — without these the process dies silently on any
+ // unhandled promise rejection. With them it logs and keeps serving tools.
+ process.on('unhandledRejection', err => {
+@@ -224,6 +253,58 @@ const RECENT_SENT_CAP = 200
+ 
+ const dmChannelUsers = new Map<string, string>()
+ 
++// Keep the "typing…" indicator alive until all in-flight replies finish. Discord
++// clears typing after ~10s, so a single sendTyping() vanishes mid-think on longer
++// answers. We re-send on an interval per channel and ref-count in-flight messages:
++// each inbound bumps pending, each reply drops it, and we stop only at zero — so a
++// second message arriving mid-think doesn't kill the indicator. A safety timeout
++// caps a never-answered loop (10 min)
++type TypingState = {
++  timer: ReturnType<typeof setInterval>
++  guard: ReturnType<typeof setTimeout>
++  pending: number
++}
++const typingTimers = new Map<string, TypingState>()
++const TYPING_RESEND_MS = 8_000
++const TYPING_MAX_MS = 10 * 60_000
++
++function startTyping(channel: Message['channel']): void {
++  if (!('sendTyping' in channel)) return
++  const id = channel.id
++  const existing = typingTimers.get(id)
++  if (existing) {
++    // Another message arrived while still answering an earlier one — keep the
++    // indicator running and remember there's more work in flight.
++    existing.pending++
++    return
++  }
++  const send = () => {
++    void (channel as { sendTyping: () => Promise<unknown> }).sendTyping().catch(() => {})
++  }
++  send()
++  const timer = setInterval(send, TYPING_RESEND_MS)
++  timer.unref?.()
++  const guard = setTimeout(() => clearTyping(id), TYPING_MAX_MS)
++  guard.unref?.()
++  typingTimers.set(id, { timer, guard, pending: 1 })
++}
++
++function stopTyping(chatId: string): void {
++  const entry = typingTimers.get(chatId)
++  if (!entry) return
++  entry.pending--
++  if (entry.pending > 0) return
++  clearTyping(chatId)
++}
++
++function clearTyping(chatId: string): void {
++  const entry = typingTimers.get(chatId)
++  if (!entry) return
++  clearInterval(entry.timer)
++  clearTimeout(entry.guard)
++  typingTimers.delete(chatId)
++}
++
+ function noteSent(id: string): void {
+   recentSentIds.add(id)
+   if (recentSentIds.size > RECENT_SENT_CAP) {
+@@ -243,6 +324,21 @@ async function gate(msg: Message): Promise<GateResult> {
+   const senderId = msg.author.id
+   const isDM = msg.channel.type === ChannelType.DM
+ 
++  // --- Multi-session routing gate (Task #2) ---
++  // 正規化名が空でルーティング不能なセッションは fail closed で全て drop する
++  if (ROUTING_BROKEN) return { action: 'drop' }
++  if (OWNER_NAME) {
++    if (isDM) {
++      // DM は cc-discord セッションのみが担当する規約 他セッションは allowlist 済みでも drop し DM を1セッションに集約する(重複防止)
++      if (!OWNS_DM) return { action: 'drop' }
++    } else {
++      // guild: 担当チャンネル以外は drop. スレッドは親で判定
++      const ch: any = msg.channel
++      const cid = ch.isThread?.() ? (ch.parentId ?? msg.channelId) : msg.channelId
++      if (ownedChannelId === null || cid !== ownedChannelId) return { action: 'drop' }
++    }
++  }
++
+   if (isDM) {
+     if (access.allowFrom.includes(senderId)) return { action: 'deliver', access }
+     if (access.dmPolicy === 'allowlist') return { action: 'drop' }
+@@ -604,6 +700,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+     switch (req.params.name) {
+       case 'reply': {
+         const chat_id = args.chat_id as string
++        clearTyping(chat_id)
+         const text = args.text as string
+         const reply_to = args.reply_to as string | undefined
+         const files = (args.files as string[] | undefined) ?? []
+@@ -624,7 +721,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+         const limit = Math.max(1, Math.min(access.textChunkLimit ?? MAX_CHUNK_LIMIT, MAX_CHUNK_LIMIT))
+         const mode = access.chunkMode ?? 'length'
+         const replyMode = access.replyToMode ?? 'first'
++        // cc-discord パッチ E: リプライ末尾にステータスブロックを付ける
++        // チャンカーが footer のコードフェンスを分断しないよう本文だけを chunk し
++        // footer は末尾チャンクに収まるなら結合 収まらなければ独立チャンクとして送る
++        const footer = replyStatusFooter()
+         const chunks = chunk(text, limit, mode)
++        if (footer) {
++          const lastChunk = chunks[chunks.length - 1]
++          if (lastChunk !== undefined && lastChunk.length + 1 + footer.length <= limit) {
++            chunks[chunks.length - 1] = `${lastChunk}\n${footer}`
++          } else {
++            chunks.push(footer)
++          }
++        }
+         const sentIds: string[] = []
+ 
+         try {
+@@ -635,6 +744,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+               (replyMode === 'all' || i === 0)
+             const sent = await ch.send({
+               content: chunks[i],
++              // コードブロック内の @everyone や <@id> も API は mention として解析し ping するため
++              // content 由来のメンション解決を全面的に無効化する (docs/discord-text-formatting.md)
++              allowedMentions: { parse: [] },
+               ...(i === 0 && files.length > 0 ? { files } : {}),
+               ...(shouldReplyTo
+                 ? { reply: { messageReference: reply_to, failIfNotExists: false } }
+@@ -686,7 +798,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+       case 'edit_message': {
+         const ch = await fetchAllowedChannel(args.chat_id as string)
+         const msg = await ch.messages.fetch(args.message_id as string)
+-        const edited = await msg.edit(args.text as string)
++        // 編集でも mentions は再解析されるため reply と同様にメンション解決を無効化する
++        const edited = await msg.edit({ content: args.text as string, allowedMentions: { parse: [] } })
+         return { content: [{ type: 'text', text: `edited (id: ${edited.id})` }] }
+       }
+       case 'download_attachment': {
+@@ -848,9 +961,88 @@ async function handleInbound(msg: Message): Promise<void> {
+     return
+   }
+ 
+-  // Typing indicator — signals "processing" until we reply (or ~10s elapses).
+-  if ('sendTyping' in msg.channel) {
+-    void msg.channel.sendTyping().catch(() => {})
++  // Typing indicator — kept alive until reply() runs (see startTyping) Discord
++  // clears typing after ~10s, so we re-send on an interval instead of just once.
++  startTyping(msg.channel)
++
++  // --- Per-inbound progress thread (Patch C) ---
++  // 各 inbound で進捗用スレッドを立て tool/text の途中経過をそこへ流す
++  // DM はスレッド作成不可なので channel ID をそのまま書き notify は DM に直接投稿する
++  if (OWNER_NAME) {
++    const ptDir = join(STATE_DIR, 'progress-thread')
++    try { mkdirSync(ptDir, { recursive: true, mode: 0o700 }) } catch { /* dir 作成失敗は次の write で検知される */ }
++    const ptFile = join(ptDir, OWNER_NAME)
++
++    // --- inbound 多重処理防止ロック ---
++    // Claude Code はセッション毎に MCP server として本プロセスを起動するため 同名ディレクトリの
++    // セッション (resume の daemon セッション等を含む) が複数あると 同じ OWNER_NAME の server が
++    // 同時に Gateway へ接続し 1 つの inbound を各プロセスが処理してしまう
++    // スレッド内の inbound や DM も対象になるようチャンネル種別の分岐より前に
++    // message_id 名のロックを wx (排他作成) で取得し 取れなかったプロセスは inbound ごと破棄する
++    const lockFile = join(ptDir, `${OWNER_NAME}.lock-${msg.id}`)
++    try {
++      writeFileSync(lockFile, String(process.pid), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
++      // 60 秒より古いロックを掃除する 直近の別 inbound を他プロセスが処理中の可能性があるため
++      // 新しいものは残す
++      try {
++        const now = Date.now()
++        for (const f of readdirSync(ptDir)) {
++          if (!f.startsWith(`${OWNER_NAME}.lock-`) || f === `${OWNER_NAME}.lock-${msg.id}`) continue
++          const fp = join(ptDir, f)
++          try { if (now - statSync(fp).mtimeMs > 60_000) rmSync(fp, { force: true }) } catch { /* 競合は無害 */ }
++        }
++      } catch { /* 掃除失敗は無害 */ }
++    } catch (err) {
++      // EEXIST は他プロセスがこの inbound を取得済み (そのプロセスがスレッドを作り inbound も処理する)
++      // 敗者が処理を続けると同じメッセージへ二重に応答するため typing を止めて inbound ごと破棄する
++      if ((err as { code?: string }).code === 'EEXIST') {
++        clearTyping(chat_id)
++        return
++      }
++      // それ以外 (dir 不在等) はロック機構が使えないだけなので従来どおり続行する
++    }
++
++    if (msg.channel.type === ChannelType.DM) {
++      try { writeFileSync(ptFile, chat_id, { encoding: 'utf8', mode: 0o600 }) } catch (err) {
++        process.stderr.write(`discord channel: failed to write progress-thread (DM): ${err}\n`)
++      }
++    } else if ('threads' in msg.channel) {
++      // スレッド名: [MM/DD HH:MM] + 本文(空白正規化, 80字超は79字+…, 空は progress)
++      // cc-discord plugin/src/summarize.ts の threadName() と同じロジックをインライン化している
++      const pad = (n: number) => String(n).padStart(2, '0')
++      const dt = msg.createdAt
++      const stamp = `${pad(dt.getMonth() + 1)}/${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`
++      const nameBody = (msg.content || '').replace(/\s+/g, ' ').trim()
++      // 絵文字などの非 BMP 文字でサロゲートペアを分断しないようコードポイント単位で切る
++      const namePoints = [...nameBody]
++      const nameClipped = namePoints.length > 80 ? namePoints.slice(0, 79).join('') + '…' : nameBody
++      const name = `[${stamp}] ${nameClipped || 'progress'}`
++      try {
++        // 親チャンネルに @silent (SUPPRESS_NOTIFICATIONS, ビット 12 = 4096) で
++        // ゼロ幅スペース (U+200B) 1 文字のアンカーを bot 自身として投げ それを起点に public スレッドを作る
++        // - アンカーの作者が bot なのでユーザーはスレッドの参加者にならず per-thread のフォローが付かない
++        // - public なので所有者はクリックで普通に閲覧できる (管理権限不要)
++        // - アンカーがある作成方式なので親チャンネルの type 18 (started a thread) 行は出ない
++        // - flags でアンカー自身の push 通知も抑止する
++        // 親チャンネルでアンカーを目立たせないよう ZWSP 単体(視覚的に空)を採用している
++        // ASCII space と NBSP (U+00A0) はいずれも Discord API 側で trailing trim されるため不可
++        const anchor = await (msg.channel as any).send({
++          content: '​',
++          flags: 1 << 12,
++        })
++        const thread = await anchor.startThread({
++          name,
++          autoArchiveDuration: 60,
++          reason: 'cc-discord progress streaming',
++        })
++        writeFileSync(ptFile, thread.id, { encoding: 'utf8', mode: 0o600 })
++      } catch (err) {
++        process.stderr.write(`discord channel: failed to create progress thread: ${err}\n`)
++        try { writeFileSync(ptFile, chat_id, { encoding: 'utf8', mode: 0o600 }) } catch { /* 完全失敗時は次の inbound で再試行される */ }
++      }
++    } else {
++      try { writeFileSync(ptFile, chat_id, { encoding: 'utf8', mode: 0o600 }) } catch { /* 同上 */ }
++    }
+   }
+ 
+   // Ack reaction — lets the user know we're processing. Fire-and-forget.
+@@ -890,8 +1082,60 @@ async function handleInbound(msg: Message): Promise<void> {
+   })
+ }
+ 
+-client.once('ready', c => {
++// 担当チャンネルの解決処理. ready 時と定期再解決の両方から呼ぶ
++// access.json への許可追加やチャンネル改名を再起動なしで反映するため 60 秒毎に再評価し
++// 結果が変化したときだけログと route 更新を行う
++let lastResolvedChannelId: string | null | undefined
++function resolveOwnedChannel(c: any): void {
++  // guild チャンネルから正規化名一致を探す
++  // 同名のカテゴリ/ボイス/フォーラム/スレッドを誤って担当にしないよう guild テキストチャンネルに限定する
++  // さらに access.json で許可済み (groups 登録済み) のチャンネルに限定する
++  // 進捗送信 (watch/notify) は gate を通らず REST で直接投稿するため ここで許可リストを
++  // 強制しないと 同名の未許可チャンネルへセッション内容が流出しうる
++  const access = loadAccess()
++  const matches = c.channels.cache.filter(
++    (ch: any) => ch.type === ChannelType.GuildText && (ch.id in access.groups) && 'name' in ch && typeof ch.name === 'string' && normalizeName(ch.name) === OWNER_NAME,
++  )
++  const first = matches.first()
++  const resolved = first ? first.id : null
++  if (resolved === lastResolvedChannelId) return
++  lastResolvedChannelId = resolved
++  ownedChannelId = resolved
++  // 解決先が変わったら古い progress-thread を破棄する
++  // notify は progress-thread を route より先に読むため 残すと旧スレッドへ進捗が流れ続ける
++  try { rmSync(join(STATE_DIR, 'progress-thread', OWNER_NAME), { force: true }) } catch { /* 削除失敗は無視する */ }
++  if (first) {
++    // routes/<OWNER_NAME> に担当チャンネルIDを書く(hook/監視が読む)
++    try {
++      const rdir = join(STATE_DIR, 'routes')
++      mkdirSync(rdir, { recursive: true, mode: 0o700 })
++      writeFileSync(join(rdir, OWNER_NAME), first.id, { encoding: 'utf8', mode: 0o600 })
++    } catch (err) {
++      process.stderr.write(`discord channel: failed to write route: ${err}\n`)
++    }
++    process.stderr.write(`discord channel: routing to #${first.name} (${first.id}); DM=${OWNS_DM}\n`)
++  } else {
++    // 一致チャンネルが無い場合は前回実行の stale な route を削除する
++    // 残すと改名/削除後も watch/notify が旧チャンネル ID へ進捗を投稿し続ける
++    try { rmSync(join(STATE_DIR, 'routes', OWNER_NAME), { force: true }) } catch { /* 削除失敗は無視する */ }
++    process.stderr.write(`discord channel: no channel named '${OWNER_NAME}' — guild routing off (DM=${OWNS_DM})\n`)
++  }
++}
++
++client.once('ready', async c => {
+   process.stderr.write(`discord channel: gateway connected as ${c.user.tag}\n`)
++  if (!OWNER_NAME) {
++    if (ROUTING_BROKEN) {
++      process.stderr.write('discord channel: project dir normalizes to empty — routing broken, dropping all inbound\n')
++    } else {
++      process.stderr.write('discord channel: CLAUDE_PROJECT_DIR unset — routing disabled (handling all)\n')
++    }
++    return
++  }
++  resolveOwnedChannel(c)
++  // /discord:access による許可追加やチャンネル改名を再起動なしで拾うための定期再解決
++  const timer = setInterval(() => resolveOwnedChannel(c), 60_000)
++  ;(timer as any).unref?.()
+ })
+ 
+ client.login(TOKEN).catch(err => {

@@ -66,4 +66,8 @@ if (cmd) {
   child.stdin.write(raw)
   child.stdin.end()
   child.on('exit', (code) => process.exit(code ?? 0))
+} else {
+  // ラップ対象が未指定だと statusline 表示自体が出なくなる
+  // 設定ミスに早期に気付けるよう警告を出す
+  process.stderr.write('[statusline-tee] no passthrough command specified\n')
 }

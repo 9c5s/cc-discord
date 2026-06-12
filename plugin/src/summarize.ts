@@ -99,7 +99,8 @@ export function toolSummary(name: string, input: Record<string, unknown>, hideBo
   const n = shortToolName(name)
   if (hideBody || HIDE_BODY_TOOLS.has(n)) return code(`⚙️[${n}]`)
   const fp = input.file_path ?? input.notebook_path ?? input.scriptPath
-  if (typeof fp === 'string') return code(`⚙️[${n}] ${fileName(fp)}`)
+  // basename も他の補足と同じ上限に通し 最終長ガードの素通りを防ぐ
+  if (typeof fp === 'string') return code(`⚙️[${n}] ${truncate(fileName(fp), DETAIL_LIMIT)}`)
   const detail = pickDetail(input)
   if (!detail) return code(`⚙️[${n}]`)
   let body = truncate(detail.value, detail.key === 'command' ? COMMAND_LIMIT : DETAIL_LIMIT)

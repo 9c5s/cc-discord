@@ -188,8 +188,12 @@ client.once('ready', async c => {
   }
   // guild チャンネルから正規化名一致を探す
   // 同名のカテゴリ/ボイス/フォーラム/スレッドを誤って担当にしないよう guild テキストチャンネルに限定する
+  // さらに access.json で許可済み (groups 登録済み) のチャンネルに限定する
+  // 進捗送信 (watch/notify) は gate を通らず REST で直接投稿するため ここで許可リストを
+  // 強制しないと 同名の未許可チャンネルへセッション内容が流出しうる
+  const bootAccess = loadAccess()
   const matches = c.channels.cache.filter(
-    ch => ch.type === ChannelType.GuildText && 'name' in ch && typeof (ch as any).name === 'string' && normalizeName((ch as any).name) === OWNER_NAME,
+    ch => ch.type === ChannelType.GuildText && (ch.id in bootAccess.groups) && 'name' in ch && typeof (ch as any).name === 'string' && normalizeName((ch as any).name) === OWNER_NAME,
   )
   const first = matches.first()
   if (first) {

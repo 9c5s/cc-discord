@@ -92,7 +92,12 @@ function apply(): void {
   const orig = `${serverTs}.orig`
   if (!existsSync(orig)) copyFileSync(serverTs, orig)
   const applied = gitApply(dir, patchPath, [])
-  if (!applied.ok) fail(`git apply が失敗した: ${applied.stderr.trimEnd()}`)
+  if (!applied.ok) {
+    fail(
+      `git apply が失敗した: ${applied.stderr.trimEnd()}\n` +
+      `  中途半端な状態になった場合は server.ts.orig から復元できる`,
+    )
+  }
   // 構文検証に失敗したら素に戻し 壊れた server.ts を残さない
   if (!bunBuildOk(dir)) {
     copyFileSync(orig, serverTs)

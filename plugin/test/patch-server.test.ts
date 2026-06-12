@@ -128,6 +128,15 @@ test('適用後の bun build が失敗したら復元して exit 1', () => {
   expect(r.stderr).toContain('復元')
 })
 
+test('build 失敗時の復元は stale な .orig でなく適用直前の内容に戻す', () => {
+  writeFileSync(join(patches, '0.0.4.patch'), makePatch(BASE, BROKEN))
+  // 過去の適用で作られた古い .orig が現物と異なる状況を再現する
+  writeFileSync(join(cache, '0.0.4', 'server.ts.orig'), 'stale orig content\n')
+  const r = runCli()
+  expect(r.status).toBe(1)
+  expect(readFileSync(join(cache, '0.0.4', 'server.ts'), 'utf8')).toBe(BASE)
+})
+
 test('--make は .orig から patch を再生成しローカルパスを含めない', () => {
   writeFileSync(join(cache, '0.0.4', 'server.ts'), PATCHED)
   writeFileSync(join(cache, '0.0.4', 'server.ts.orig'), BASE)

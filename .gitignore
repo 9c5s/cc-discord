@@ -12,3 +12,7 @@ node_modules/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 非公開の作業メモとローカル専用スクリプト (公開リポジトリに含めない)
+/docs/_private/
+/scripts/

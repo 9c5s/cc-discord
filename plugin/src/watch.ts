@@ -112,10 +112,12 @@ if (import.meta.main) {
       const fd = openSync(transcriptPath, 'r')
       let chunk = ''
       try {
+        // readSync は要求より少なく読むことがある (同時更新中の transcript との競合)
+        // 実読取量で offset を進め decode も実読取ぶんに限定しないと増分を取りこぼす
         const buf = Buffer.alloc(size - offset)
-        readSync(fd, buf, 0, buf.length, offset)
-        offset = size
-        chunk = buf.toString('utf8')
+        const bytesRead = readSync(fd, buf, 0, buf.length, offset)
+        offset += bytesRead
+        chunk = buf.subarray(0, bytesRead).toString('utf8')
       } finally {
         // readSync が throw しても fd を確実に閉じてリークを防ぐ
         closeSync(fd)

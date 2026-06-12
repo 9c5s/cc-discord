@@ -115,6 +115,8 @@ async function withMockedFetch(
   responses: Response[],
   fn: () => Promise<void>,
 ): Promise<{ url: string; init: RequestInit }[]> {
+  // 実行環境に同名の変数があっても汚染しないよう退避して復元する
+  const savedBotToken = process.env.DISCORD_BOT_TOKEN
   process.env.CLAUDE_PROJECT_DIR = '/projects/cc-discord'
   process.env.DISCORD_BOT_TOKEN = 'test-token'
   writeRoute('cc-discord', '123456789')
@@ -129,7 +131,8 @@ async function withMockedFetch(
     await fn()
   } finally {
     globalThis.fetch = orig
-    delete process.env.DISCORD_BOT_TOKEN
+    if (savedBotToken === undefined) delete process.env.DISCORD_BOT_TOKEN
+    else process.env.DISCORD_BOT_TOKEN = savedBotToken
   }
   return calls
 }

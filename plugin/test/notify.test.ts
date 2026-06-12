@@ -156,12 +156,12 @@ test('sendNow: 429 のとき retry_after を待って1回だけ再送する', as
   expect(JSON.parse(String(calls[1].init.body)).content).toBe('retry me')
 })
 
-test('sendNow: 1900 文字を超える本文は切り捨てサロゲートペアを分断しない', async () => {
+test('sendNow: 1900 コードポイントを超える本文は同じ単位で切り捨てペアを分断しない', async () => {
   const text = 'a'.repeat(1899) + '😀😀'
   const calls = await withMockedFetch([new Response('{}', { status: 200 })], async () => {
     await sendNow(text)
   })
   const content = JSON.parse(String(calls[0].init.body)).content as string
-  // 1900 文字目が絵文字の上位サロゲートに当たるため 1 文字余分に落ちて 1899 文字になる
-  expect(content).toBe('a'.repeat(1899))
+  // 1901 コードポイントのため先頭 1900 コードポイント (絵文字1つを含む) に切られる
+  expect(content).toBe('a'.repeat(1899) + '😀')
 })

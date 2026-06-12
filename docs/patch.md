@@ -477,9 +477,10 @@ function replyStatusFooter(): string | null {
 
 ### 注意すべきポイント
 
-- **settings.json 側の前提**: `statusLine.command` が
+- **settings.json 側の前提**: `statusLine.command` が tee でラップされていること。
+  例 (パスは著者環境のもの。**利用時は自身の環境のパスに置き換える**):
   `bun <repo>/plugin/src/statusline-tee.ts uv run ~/.claude/scripts/statusline.py --icons=nerd`
-  になっていること (tee がラップ)。tee を外すと .txt が更新されなくなり、10分で footer は自然消滅する。
+  tee を外すと .txt が更新されなくなり、10分で footer は自然消滅する。
 - **owner 単位の last-writer-wins**: 同一プロジェクトでセッションが並走すると最後に statusline を
   描画したセッションの値になる。reply する瞬間は自セッションがアクティブなため実用上は一致する。
 - statusline はアクティブなインタラクティブセッションでしか描画されない。headless 等では footer なし。

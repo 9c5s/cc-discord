@@ -55,20 +55,19 @@ export function channelId(): string | null {
 }
 
 // 進捗用の宛先 ID を progress-thread ファイルから解決する
-// guild text チャンネルでは server.ts が inbound 毎に新規スレッドを作って ID を書き DM ではチャンネル ID をそのまま書く
-// ファイルが無い または読めない場合は channelId() にフォールバックする
-// readFileSync は server.ts が inbound 毎にファイルを書き換えるため TOCTOU で throw しうる
-// throw を catch して channelId() にフォールバックする
+// server.ts が inbound 毎に書く (guild はスレッド ID, DM はチャンネル ID, スレッド作成失敗時は親チャンネル ID)
+// ファイルが無い または読めない場合は null を返して送信をスキップする
+// Discord 起点の inbound が無いローカル作業の進捗を channelId() フォールバックで
+// チャンネルへ漏らさないため フォールバックは行わない
 export function progressChannelId(): string | null {
   const n = ownerName()
   if (!n) return null
   const f = join(stateDir(), 'progress-thread', n)
-  if (!existsSync(f)) return channelId()
   try {
     const v = readFileSync(f, 'utf8').trim()
-    return v || channelId()
+    return v || null
   } catch {
-    return channelId()
+    return null
   }
 }
 

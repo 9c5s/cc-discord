@@ -47,7 +47,7 @@ function resetDate(ts: number): string {
 }
 
 // rate_limits の1バケット (five_hour/seven_day) を "⏰ 63% 19:10" 形式にする
-// アイコンが 5h/7d のラベルを兼ねる (9c5s 指定 2026-06-10)
+// アイコンが 5h/7d のラベルを兼ねる
 function rateSeg(rl: J | null, key: string, icon: string, fmt: (ts: number) => string): string | null {
   const b = obj(rl?.[key])
   if (!b) return null

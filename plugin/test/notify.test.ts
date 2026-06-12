@@ -40,12 +40,12 @@ afterEach(() => {
 // --- ownerName のテスト ---
 
 test('ownerName: CLAUDE_PROJECT_DIR 設定時にベース名を正規化して返す', () => {
-  process.env.CLAUDE_PROJECT_DIR = 'D:\\projects\\My Proj'
+  process.env.CLAUDE_PROJECT_DIR = 'C:\\example\\My Proj'
   expect(ownerName()).toBe('my-proj')
 })
 
 test('ownerName: 末尾セパレータ付きでも同じ名前を返す', () => {
-  process.env.CLAUDE_PROJECT_DIR = 'D:\\projects\\My Proj\\'
+  process.env.CLAUDE_PROJECT_DIR = 'C:\\example\\My Proj\\'
   expect(ownerName()).toBe('my-proj')
 })
 

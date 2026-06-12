@@ -165,11 +165,12 @@ if (import.meta.main) {
   // PID が watch.ts を実行中のプロセスかをコマンドラインで確認する
   // 実行ファイル名 (bun) だけの判定では PID 再利用先が別用途の bun だった場合に誤殺するため
   // コマンドライン引数に watch.ts が含まれることまで検証する
+  // Windows は PowerShell の CIM を使う (wmic は Windows 11 25H2 で削除されるため依存しない)
   // 確認に失敗した場合 (プロセス不在を含む) は false を返し kill しない方向に倒す
   function isWatchProcess(pid: number): boolean {
     try {
       const out = process.platform === 'win32'
-        ? execFileSync('wmic', ['process', 'where', `processid=${pid}`, 'get', 'commandline', '/value'], { encoding: 'utf8', timeout: 3000 })
+        ? execFileSync('powershell', ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { encoding: 'utf8', timeout: 5000 })
         : execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8', timeout: 3000 })
       return out.toLowerCase().includes('watch.ts')
     } catch {

@@ -5,6 +5,11 @@ test('toolSummary は絵文字も含めて file_path をインラインコード
   expect(toolSummary('Read', { file_path: 'C:/x/server.ts' })).toBe('`⚙️[Read] server.ts`')
 })
 
+test('toolSummary は極端に長いファイル名も200字で切り詰める', () => {
+  const name = 'x'.repeat(250) + '.ts'
+  expect(toolSummary('Read', { file_path: 'C:/work/' + name })).toBe('`⚙️[Read] ' + 'x'.repeat(200) + '…`')
+})
+
 test('toolSummary は pattern をインラインコードにする', () => {
   expect(toolSummary('Grep', { pattern: 'foo.*bar' })).toBe('`⚙️[Grep] foo.*bar`')
 })

@@ -204,6 +204,9 @@ client.once('ready', async c => {
     }
     process.stderr.write(`discord channel: routing to #${(first as any).name} (${first.id}); DM=${OWNS_DM}\n`)
   } else {
+    // 一致チャンネルが無い場合は前回実行の stale な route を削除する
+    // 残すと改名/削除後も watch/notify が旧チャンネル ID へ進捗を投稿し続ける
+    try { rmSync(join(STATE_DIR, 'routes', OWNER_NAME), { force: true }) } catch { /* 削除失敗は無視する */ }
     process.stderr.write(`discord channel: no channel named '${OWNER_NAME}' — guild routing off (DM=${OWNS_DM})\n`)
   }
 })
@@ -212,6 +215,8 @@ client.once('ready', async c => {
 - routes ディレクトリ: `~/.claude/channels/discord/routes/` (パーミッション 0o700)
 - routes ファイル: `routes/<OWNER_NAME>` にチャンネルIDを書く(パーミッション 0o600)
 - チャンネル名の正規化照合で担当を決定し、`ownedChannelId` に代入する。
+- 一致チャンネルが無い場合は stale な `routes/<OWNER_NAME>` を削除する(チャンネル改名/削除後に
+  旧チャンネルへ進捗が流れ続けるのを防ぐ。2026-06-12 PR #1 レビュー指摘で追加)。
 
 #### 改変3(Task 4): gate 関数にルーティングゲートを追加
 

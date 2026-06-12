@@ -163,6 +163,9 @@ function normalizeName(input: string): string {
 }
 const PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR ?? ''
 const OWNER_NAME = PROJECT_DIR ? normalizeName(PROJECT_DIR.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '') : ''
+// PROJECT_DIR が設定されているのに正規化名が空になる場合 (日本語のみのディレクトリ名等) は
+// ルーティング不能として fail closed で全 inbound を drop する (全件処理への退行を防ぐ)
+const ROUTING_BROKEN = PROJECT_DIR !== '' && OWNER_NAME === ''
 // DM を担当するのは正規化名が 'cc-discord' のセッション
 const OWNS_DM = OWNER_NAME === 'cc-discord'
 // ready 後に解決する担当 guild チャンネルID(なければ null)
@@ -222,7 +225,11 @@ function resolveOwnedChannel(c: any): void {
 client.once('ready', async c => {
   process.stderr.write(`discord channel: gateway connected as ${c.user.tag}\n`)
   if (!OWNER_NAME) {
-    process.stderr.write('discord channel: CLAUDE_PROJECT_DIR unset — routing disabled (handling all)\n')
+    if (ROUTING_BROKEN) {
+      process.stderr.write('discord channel: project dir normalizes to empty — routing broken, dropping all inbound\n')
+    } else {
+      process.stderr.write('discord channel: CLAUDE_PROJECT_DIR unset — routing disabled (handling all)\n')
+    }
     return
   }
   resolveOwnedChannel(c)
@@ -244,6 +251,8 @@ client.once('ready', async c => {
 
 ```typescript
   // --- Multi-session routing gate (Task #2) ---
+  // 正規化名が空でルーティング不能なセッションは fail closed で全て drop する
+  if (ROUTING_BROKEN) return { action: 'drop' }
   if (OWNER_NAME) {
     if (isDM) {
       // DM は cc-discord セッションのみが担当する規約 他セッションは allowlist 済みでも drop し DM を1セッションに集約する(重複防止)

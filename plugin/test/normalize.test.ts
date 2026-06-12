@@ -22,7 +22,7 @@ test('空文字列や記号のみは空文字列を返す', () => {
 })
 
 test('ownerFromDir は Windows パスから所有者名を抽出して正規化する', () => {
-  expect(ownerFromDir('D:\\projects\\My Proj')).toBe('my-proj')
+  expect(ownerFromDir('C:\\example\\My Proj')).toBe('my-proj')
 })
 
 test('ownerFromDir は POSIX パスから所有者名を抽出して正規化する', () => {
@@ -30,7 +30,7 @@ test('ownerFromDir は POSIX パスから所有者名を抽出して正規化す
 })
 
 test('ownerFromDir は末尾の複数スラッシュを処理する', () => {
-  expect(ownerFromDir('D:\\projects\\test\\\\')).toBe('test')
+  expect(ownerFromDir('C:\\example\\test\\\\')).toBe('test')
   expect(ownerFromDir('/home/test///')).toBe('test')
 })
 

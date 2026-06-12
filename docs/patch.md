@@ -9,7 +9,6 @@ Claude Code の Discord channel plugin (`discord@claude-plugins-official`) に�
 `~/.claude/plugins/cache/claude-plugins-official/discord/<version>/server.ts`
 
 - 現行 version: `0.0.4`
-- Windows 実パス: `~\.claude\plugins\cache\claude-plugins-official\discord\0.0.4\server.ts`
 - **バージョンディレクトリ (`0.0.4`) は plugin 更新で変わる**ので、更新後は新しいバージョンの `server.ts` に当て直す。
 
 ---
@@ -448,7 +447,7 @@ Discord API はメッセージ content 全体から mention を解析して ping
 `statusline-tee.ts` (settings.json の statusLine で本来のコマンドをラップ) が
 `stateDir/statusline/<owner>.txt` に整形済みブロックを書き、server.ts はそれを読んで
 reply 末尾に連結するだけにする。揮発する patch 面積を最小化し、整形ロジックは
-`<repo>/plugin/src/status.ts` (テスト付き) に置く。
+本リポジトリの `plugin/src/status.ts` (テスト付き) に置く。
 
 ### 変更箇所 (2 箇所)
 
@@ -456,7 +455,7 @@ reply 末尾に連結するだけにする。揮発する patch 面積を最小�
 
 ```ts
 // --- Reply status footer (cc-discord パッチ E) ---
-// statusline-tee.ts (<repo>) が stateDir/statusline/<owner>.txt に書く
+// statusline-tee.ts (cc-discord リポジトリ) が stateDir/statusline/<owner>.txt に書く
 // 整形済みステータスブロックを reply 末尾に付ける ファイルが無い場合や10分より
 // 古い(セッション非アクティブ)場合は付けない 失敗しても reply 本体は止めない
 function replyStatusFooter(): string | null {
@@ -483,7 +482,7 @@ function replyStatusFooter(): string | null {
 ### 注意すべきポイント
 
 - **settings.json 側の前提**: `statusLine.command` が tee でラップされていること。
-  例 (パスは著者環境のもの。**利用時は自身の環境のパスに置き換える**):
+  例 (`<repo>` は本リポジトリの clone 先。statusline スクリプト部分は自身の設定に置き換える):
   `bun <repo>/plugin/src/statusline-tee.ts uv run ~/.claude/scripts/statusline --icons=nerd`
   tee を外すと .txt が更新されなくなり、10分で footer は自然消滅する。
 - **owner 単位の last-writer-wins**: 同一プロジェクトでセッションが並走すると最後に statusline を

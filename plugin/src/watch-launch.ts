@@ -5,10 +5,11 @@ import { join } from 'path'
 const raw = await new Response(Bun.stdin.stream()).text()
 let tp = ''
 try {
-  const payload = JSON.parse(raw)
-  tp = payload.transcript_path ?? ''
+  const payload = JSON.parse(raw) as Record<string, unknown>
+  // 文字列以外 (object や number) が来ても spawn に渡さないよう型を検証する
+  tp = typeof payload.transcript_path === 'string' ? payload.transcript_path : ''
   if (!tp) {
-    // transcript_path がペイロードに含まれない場合は stderr に診断を出す
+    // transcript_path が取れない場合は stderr に診断を出す
     // hook プロセスの stderr は Claude Code 側で観測可能である
     process.stderr.write('[watch-launch] transcript_path not found in hook payload\n')
   }

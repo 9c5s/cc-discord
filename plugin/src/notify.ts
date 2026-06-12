@@ -114,15 +114,17 @@ async function postMessage(text: string): Promise<void> {
   })
 
   // fetch 実行とエラーハンドリング ---
+  // タイムアウトを設けないと 1 回のハングで watch の送信チェーン全体が永久に詰まる
   let res: Response
   try {
     res = await fetch(`${API}/channels/${cid}/messages`, {
       method: 'POST',
       headers: { Authorization: `Bot ${t}`, 'Content-Type': 'application/json' },
       body,
+      signal: AbortSignal.timeout(15_000),
     })
   } catch (e: unknown) {
-    // ネットワーク例外は debugLog に出す
+    // ネットワーク例外とタイムアウトは debugLog に出す
     debugLog(`[notify] fetch failed: ${e}`)
     return
   }
@@ -149,6 +151,7 @@ async function postMessage(text: string): Promise<void> {
           method: 'POST',
           headers: { Authorization: `Bot ${t}`, 'Content-Type': 'application/json' },
           body,
+          signal: AbortSignal.timeout(15_000),
         })
       } catch (e2: unknown) {
         debugLog(`[notify] retry fetch failed: ${e2}`)

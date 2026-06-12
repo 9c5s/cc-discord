@@ -100,11 +100,11 @@ async function postMessage(text: string): Promise<void> {
   lastSkipReason = ''
 
   // 最終安全弁の切り捨て
-  // サロゲートペアの途中で切らないよう, 末尾に孤立した
-  // 上位サロゲートが残った場合は 1 文字余分に落とす
-  let content = text.slice(0, 1900)
-  const last = content.charCodeAt(content.length - 1)
-  if (last >= 0xd800 && last <= 0xdbff) content = content.slice(0, -1)
+  // Discord の上限はコードポイント単位のため同じ単位で数え summarize 側の
+  // 1900 コードポイントガードと整合させる (絵文字主体の本文で UTF-16 長が先に超過し
+  // コードフェンスの終端を切り落とす問題の防止. コードポイント単位ならペア分断も起きない)
+  const points = [...text]
+  const content = points.length > 1900 ? points.slice(0, 1900).join('') : text
 
   const body = JSON.stringify({
     content,

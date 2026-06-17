@@ -22,8 +22,10 @@ if (tp && owner) {
     const pid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10)
     if (!isNaN(pid)) {
       // watcher のコマンドラインにこのセッションの transcript ファイル名が含まれるか確認する
+      // windowsHide は SessionEnd hook も状況によっては console 無し状態で実行されうるため
+      // 念のため明示する watch.ts 側と同じ理由
       const out = process.platform === 'win32'
-        ? execFileSync('powershell', ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { encoding: 'utf8', timeout: 5000 })
+        ? execFileSync('powershell', ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { encoding: 'utf8', timeout: 5000, windowsHide: true })
         : execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8', timeout: 3000 })
       if (out.toLowerCase().includes(basename(tp).toLowerCase())) {
         try { process.kill(pid, 'SIGTERM') } catch { /* 既に終了済みは無視する */ }

@@ -167,10 +167,12 @@ if (import.meta.main) {
   // コマンドライン引数に watch.ts が含まれることまで検証する
   // Windows は PowerShell の CIM を使う (wmic は Windows 11 25H2 で削除されるため依存しない)
   // 確認に失敗した場合 (プロセス不在を含む) は false を返し kill しない方向に倒す
+  // windowsHide は watch.ts 自身が detached かつ console 無しで起動するため
+  // 明示しないと PowerShell が新規コンソール窓を割り当てて一瞬フラッシュする
   function isWatchProcess(pid: number): boolean {
     try {
       const out = process.platform === 'win32'
-        ? execFileSync('powershell', ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { encoding: 'utf8', timeout: 5000 })
+        ? execFileSync('powershell', ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { encoding: 'utf8', timeout: 5000, windowsHide: true })
         : execFileSync('ps', ['-p', String(pid), '-o', 'args='], { encoding: 'utf8', timeout: 3000 })
       return out.toLowerCase().includes('watch.ts')
     } catch {

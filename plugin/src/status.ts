@@ -68,7 +68,10 @@ export function buildStatusBlock(data: J, branch: string | null): string {
   const lines: string[] = []
   if (branch) lines.push(`🌿 ${branch}`)
 
-  const model = str(obj(data.model)?.display_name)
+  // display_name の "(NM context)" は冗長なので "(NM)" に短縮する
+  // statusline.py 側 _seg_model も同じ短縮を入れている (画面表示との一貫性)
+  // 通常モデル ("Opus 4.7" 等) は match しないためそのまま残る
+  const model = str(obj(data.model)?.display_name)?.replace(' context)', ')') ?? null
   const effort = str(obj(data.effort)?.level)
   if (model) lines.push(effort ? `👾 ${model} | 🧠 ${effort}` : `👾 ${model}`)
 

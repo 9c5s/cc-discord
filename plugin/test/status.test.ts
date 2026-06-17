@@ -58,6 +58,11 @@ test('buildStatusBlock は通常モデルの display_name はそのまま使う'
   expect(buildStatusBlock(d, null)).toBe('```\n👾 Opus 4.7\n```')
 })
 
+test('buildStatusBlock は末尾でない " context)" は置換しない (誤置換防止)', () => {
+  const d = { model: { display_name: 'Has (1M context) trailing text' } }
+  expect(buildStatusBlock(d, null)).toBe('```\n👾 Has (1M context) trailing text\n```')
+})
+
 test('readBranch は ref 形式の HEAD からブランチ名を読む', () => {
   const dir = mkdtempSync(join(tmpdir(), 'status-test-'))
   mkdirSync(join(dir, '.git'))

@@ -48,6 +48,16 @@ test('buildStatusBlock は要素が全て欠けるとき空文字を返す', () 
   expect(buildStatusBlock({}, null)).toBe('')
 })
 
+test('buildStatusBlock はモデル名末尾の " context)" を ")" に短縮する', () => {
+  const d = { model: { display_name: 'Opus 4.7 (1M context)' } }
+  expect(buildStatusBlock(d, null)).toBe('```\n👾 Opus 4.7 (1M)\n```')
+})
+
+test('buildStatusBlock は通常モデルの display_name はそのまま使う', () => {
+  const d = { model: { display_name: 'Opus 4.7' } }
+  expect(buildStatusBlock(d, null)).toBe('```\n👾 Opus 4.7\n```')
+})
+
 test('readBranch は ref 形式の HEAD からブランチ名を読む', () => {
   const dir = mkdtempSync(join(tmpdir(), 'status-test-'))
   mkdirSync(join(dir, '.git'))

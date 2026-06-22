@@ -189,19 +189,21 @@ cc-discord 側で進捗の流れが止まる契機に明示的に `setArchived(t
 
 ### 接続点
 
-- 新規 inbound: 次宛先 (DM channel ID / 新規スレッド ID / fallback channel ID) を決定 → owner-level write-lock を取得 → `prev = readFileSync(ptFile)` と `writeFileSync(ptFile, newTarget)` を**同期**で実行 → ロック解放 → `prev !== chat_id && prev !== newTarget` なら `prev` を archive。
+- 新規 inbound: owner-level write-lock を取得 → 次宛先 (DM channel ID / 新規スレッド ID / fallback channel ID) を決定 (anchor + startThread の `await` もロック内で実行し inbound 順を保つ) → `prev = readFileSync(ptFile)` と `writeFileSync(ptFile, newTarget)` を**同期**で実行 → ロック解放 → `prev !== chat_id && prev !== newTarget` なら `setTimeout(3s)` で遅延 archive。
 - reply 経路は archive を行わない (理由は下記の注意点を参照)。
 
-`archiveProgressThread()` 内部で `channels.fetch + isThread()` を実行し、対象がスレッドでない (DM channel ID や親 channel ID のフォールバック) 場合は no-op。`archived=true` の重複呼び出しも `archived === false` ガードで no-op。fire-and-forget で handleInbound 本体の進行を待たせない。
+`archiveProgressThread()` 内部で `channels.fetch + isThread() + ownerId === botUserId` の 3 条件を確認し、いずれかが満たされない (DM channel ID、親 channel ID、ユーザー作成スレッド) 場合は no-op。`archived=true` の重複呼び出しも `archived === false` ガードで no-op。fire-and-forget で handleInbound 本体の進行を待たせない。
 
 ### 注意すべきポイント
 
 - **対象判定はファイル内容に依存しない**: `progress-thread/<OWNER_NAME>` にはスレッド ID か DM/親チャンネル ID が混在し得るが、`channels.fetch + isThread()` でスレッド以外を弾けるため種別管理は不要。
 - **失敗は全て無視する**: 削除済み、権限不足、スレッド以外、はいずれもユーザー視認可能な悪影響が無いため stderr にも出さず黙る。
 - **bot 自身が作成者なら setArchived 可**: Discord 仕様としてスレッド作成者は管理権限なしでも自分のスレッドをアーカイブできる。anchor からの `startThread` 経由なので bot が作成者扱い。
+- **archive は bot 作成スレッド限定**: owned channel 配下の既存ユーザースレッドから inbound が来た場合、`chat_id` (= そのスレッド ID) が ptFile に入る。次の inbound 時の archive 経路で `isThread()` だけのチェックだとユーザー作成スレッドが誤って閉じられる (bot に管理権限あれば API は受理する) (Codex P2 5 巡目指摘 2026-06-22)。`archiveProgressThread()` で `ownerId === botUserId` を追加判定し、自身が作成したスレッド以外は触らない。
 - **reply 経路では archive しない**: 当初は reply 完了時に capture した target を archive する設計だったが、capture 取得 (MCP ツール呼び出し時点) より前に並走 inbound が新スレッド ID を ptFile に書き込んでいた場合、capture も現在値も新スレッド ID になり、capture==現在値ガードでは検知できず進行中の新スレッドを誤って閉じる (Codex P2 3 巡目指摘 2026-06-22)。MCP インターフェースに inbound 単位の thread ID を渡す経路が無いため、安全側に倒して reply 経路の archive を廃止し、archive は handleInbound 側 (次 inbound 宛先上書き直前) に一本化した。トレードオフ: 単発で完結した会話のスレッドは次 inbound が来るまで残るが、連続 inbound では確実に閉じられ Discord の auto archive 不発状態より滞留は確実に減る。
 - **archive は ptFile 上書き「後」に行う**: 旧版は archive → 上書きの順だったが、archive の API 呼び出しが完了する前に `plugin/src/notify.ts` (watch.ts ループ) が古い `ptFile` を読んで前スレッドへ進捗を POST し続けるため、Discord 仕様 (archived スレッドにメッセージが送られると自動 unarchive される) で archive 直後に前スレッドが再アクティブ化される (Codex P2 4 巡目指摘 2026-06-22)。ptFile を新宛先で上書きしてから archive を呼べば watch は新宛先を読むようになり、古い prev への POST が止まるため auto-unarchive レースが消える。
-- **owner-level write-lock で ptFile 上書きを直列化する**: 並行 inbound (同一プロセス内で複数 `handleInbound` が await を跨いで走るケース) で、両方が同じ prev を読み、後者の `writeFileSync` が前者を観測されないまま上書きすると、観測されなかった前者の thread ID が滞留する (Codex P2 4 巡目 body 指摘 2026-06-22)。`progress-thread/<OWNER_NAME>.write-lock` を `wx` で取得し、ロック中は `readFileSync(ptFile)` (prev capture) + `writeFileSync(ptFile, newTarget)` の同期 I/O のみを実行する。スレッド作成等の `await` はロック外で先に済ませることで critical section を ms 単位に保つ。stale ロック (プロセス死で 30 秒以上残ったもの) は次の取得試行で掃除する。ロック取得失敗時はロック無しで続行する (滞留リスクは残るが処理は止めない)。
+- **owner-level write-lock は `await` の前に取って inbound 順を保つ**: 並行 inbound (同一プロセス内で複数 `handleInbound` が await を跨いで走るケース) で観測されないまま上書きされる thread ID 滞留と、startThread 完了順での順序逆転 (早い inbound A が遅い startThread の間に 後の inbound B が先に ptFile を上書きすると、A が再開時に B を prev として誤 archive) の両方が問題 (Codex P2 4/5 巡目指摘 2026-06-22)。`progress-thread/<OWNER_NAME>.write-lock` を `wx` で取得し、新宛先決定 (anchor + startThread の `await`) もロック内で実行する。critical section は startThread の API レイテンシ (通常 100-500ms) を含むが、並行 inbound はロック待ちで直列化される。stale ロック (プロセス死で 30 秒以上残ったもの) は次の取得試行で掃除する。ロック取得失敗 (30 回 × 100ms = 最大 3 秒) はロック無しで続行する (滞留リスクは残るが処理は止めない)。
+- **archive は ptFile 上書き後 3 秒遅延で呼ぶ**: `plugin/src/notify.ts` は `progressChannelId()` を local `cid` に capture してから fetch を `await` するため、ptFile 上書き直前に旧 prev を capture した watch iteration が遅れて POST を完了させると Discord の自動 unarchive (archived スレッドへの POST で自動的に open される仕様) で前スレッドが再アクティブ化する (Codex P2 5 巡目指摘 2026-06-22)。watch ループ周期 (250ms) を十分超える 3 秒の `setTimeout` を入れることで in-flight POST の完了を待つ。`tid.unref?.()` で Node.js プロセスの終了をブロックしないようにする。
 - **prev が次の chat_id や newTarget と同じ場合は archive をスキップする**: スレッド内連続 inbound のように prev と次宛先が同じ ID になるケースでは archive 後の上書きで watcher が archived スレッドへ POST し続ける (Codex P2 3 巡目指摘 2026-06-22)。`prev && prev !== chat_id && prev !== newTarget` を archive 条件にする。新規スレッド作成パスで `newTarget` が prev と偶然一致する確率は無視できるが念のため両方比較する。
 - **過去の滞留スレッドは API レベルで一括 setArchived**: 本パッチは新規分のみ救う。既存の滞留 (Discord auto archive 不発で残ったもの) は運用者側で API レベルの `setArchived(true)` を一括投げる必要がある。判定は「owner_id=bot + 名前パターン + autoArchiveDuration=60 の 3 条件 AND」が安全で、bot 参加 guild の active threads 全体をスキャンすれば routes/* 範囲外の他チャンネルでも対応できる。
 

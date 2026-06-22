@@ -1,5 +1,5 @@
 diff --git a/server.ts b/server.ts
-index 0595fc7..4d20711 100644
+index 0595fc7..386bd99 100644
 --- a/server.ts
 +++ b/server.ts
 @@ -63,6 +63,35 @@ if (!TOKEN) {
@@ -183,7 +183,7 @@ index 0595fc7..4d20711 100644
          return { content: [{ type: 'text', text: `edited (id: ${edited.id})` }] }
        }
        case 'download_attachment': {
-@@ -802,6 +924,35 @@ client.on('interactionCreate', async (interaction: Interaction) => {
+@@ -802,6 +924,41 @@ client.on('interactionCreate', async (interaction: Interaction) => {
      .catch(() => {})
  })
  
@@ -198,9 +198,15 @@ index 0595fc7..4d20711 100644
 +  try {
 +    const ch = await client.channels.fetch(target)
 +    const t = ch as any
-+    if (t && typeof t.isThread === 'function' && t.isThread() && t.archived === false) {
-+      await t.setArchived(true, 'cc-discord progress thread done')
-+    }
++    if (!t || typeof t.isThread !== 'function' || !t.isThread()) return
++    if (t.archived !== false) return
++    // 作成者が bot 自身でないスレッドは触らない (Codex P2 5 巡目指摘 2026-06-22)
++    // owned channel 配下の既存ユーザースレッドから inbound が来た場合 chat_id は
++    // そのスレッドの ID で ptFile に入るが ユーザー作成スレッドを bot が誤って閉じないよう
++    // 自身が作成者の場合に限定する (bot に管理権限があると検査せず archive できてしまう)
++    const myId = client.user?.id
++    if (!myId || t.ownerId !== myId) return
++    await t.setArchived(true, 'cc-discord progress thread done')
 +  } catch {
 +    // 削除済み 権限不足 スレッド以外はいずれも無害なので無視する
 +  }
@@ -219,7 +225,7 @@ index 0595fc7..4d20711 100644
  client.on('messageCreate', msg => {
    if (msg.author.bot) return
    handleInbound(msg).catch(e => process.stderr.write(`discord: handleInbound failed: ${e}\n`))
-@@ -848,9 +999,136 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -848,9 +1005,143 @@ async function handleInbound(msg: Message): Promise<void> {
      return
    }
  
@@ -267,7 +273,35 @@ index 0595fc7..4d20711 100644
 +      // それ以外 (dir 不在等) はロック機構が使えないだけなので従来どおり続行する
 +    }
 +
-+    // 新宛先を決定する (async 処理含む owner-level lock の外で実行する) (cc-discord パッチ F)
++    // owner-level の ptFile 排他ロックを取得する (cc-discord パッチ F)
++    // 新宛先決定 (anchor + startThread の await) よりも先にロックを取ることで inbound 順を保つ
++    // 旧版は startThread 完了順にロックを取っていたため 早い inbound A が遅い startThread の間に
++    // 後の inbound B が先にロックを取って ptFile = B となり A が再開して ptFile = A に上書きして B を
++    // archive するという「inbound 順 ≠ ptFile 上書き順」レースが発生した (Codex P2 5 巡目指摘 2026-06-22)
++    // critical section は startThread の API レイテンシ (通常 100-500ms) を含むため長くなるが
++    // 並行 inbound はロック待ちで直列化される 30 回 × 100ms = 最大 3 秒待ってもロック取れない場合は
++    // ロック無しで続行 (滞留や順序逆転リスクは残るが処理は止めない)
++    // stale ロック (プロセス死等で 30 秒以上残ったもの) は次の取得試行で掃除する
++    const writeLockFile = join(ptDir, `${OWNER_NAME}.write-lock`)
++    let writeLockHeld = false
++    for (let i = 0; i < 30; i++) {
++      try {
++        writeFileSync(writeLockFile, String(process.pid), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
++        writeLockHeld = true
++        break
++      } catch (err) {
++        if ((err as { code?: string }).code !== 'EEXIST') break
++        try {
++          if (Date.now() - statSync(writeLockFile).mtimeMs > 30_000) {
++            rmSync(writeLockFile, { force: true })
++            continue
++          }
++        } catch { /* 競合は無害 */ }
++        await new Promise(r => setTimeout(r, 100))
++      }
++    }
++
++    // 新宛先を決定する (ロック中で await する) (cc-discord パッチ F)
 +    // - DM/else: 即 chat_id (channel ID)
 +    // - thread: anchor + startThread の API 呼び出しを await し 結果のスレッド ID を採用
 +    //   作成失敗時は chat_id にフォールバック
@@ -310,34 +344,7 @@ index 0595fc7..4d20711 100644
 +      }
 +    }
 +
-+    // owner-level の ptFile 排他ロックを取得する (cc-discord パッチ F)
-+    // 並行 inbound (同一プロセス内で複数 handleInbound が await を跨いで走るケース) で
-+    // 両方が同じ prev を読み 後者の writeFileSync が前者を観測されないまま上書きすると
-+    // 観測されなかった前者の thread ID が滞留する問題への対処 (Codex P2 4 巡目指摘 2026-06-22)
-+    // ロック中の処理は readFileSync + writeFileSync の同期 I/O だけにし
-+    // スレッド作成等の await はロック外で済ませることで critical section を ms 単位に保つ
-+    // stale ロック (プロセス死等で 30 秒以上残ったもの) は次の取得試行で掃除する
-+    const writeLockFile = join(ptDir, `${OWNER_NAME}.write-lock`)
-+    let writeLockHeld = false
-+    for (let i = 0; i < 30; i++) {
-+      try {
-+        writeFileSync(writeLockFile, String(process.pid), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-+        writeLockHeld = true
-+        break
-+      } catch (err) {
-+        if ((err as { code?: string }).code !== 'EEXIST') break
-+        try {
-+          if (Date.now() - statSync(writeLockFile).mtimeMs > 30_000) {
-+            rmSync(writeLockFile, { force: true })
-+            continue
-+          }
-+        } catch { /* 競合は無害 */ }
-+        await new Promise(r => setTimeout(r, 100))
-+      }
-+    }
-+    // ロック取得失敗時は ロック無しで続行する 滞留リスクは残るが処理は止めない
-+
-+    // 同期 critical section: prev capture + ptFile 上書き
++    // ロック中で prev capture + ptFile 上書き (両方同期)
 +    let prev = ''
 +    try { prev = readFileSync(ptFile, 'utf8').trim() } catch { /* 無ければ '' */ }
 +    try {
@@ -351,15 +358,21 @@ index 0595fc7..4d20711 100644
 +    }
 +
 +    // 古い prev を archive (cc-discord パッチ F)
-+    // ptFile 上書き後に行うため watch.ts は新宛先を読むようになり 古い prev への POST が止まる
-+    // (archive → 上書きの順だと archive 中に watch が古い prev へ POST し続けて Discord の
-+    // 自動 unarchive が発火する Codex P2 4 巡目指摘 2026-06-22)
-+    // prev が次の宛先 (chat_id) や新スレッド ID (newTarget) と同じ場合はスレッド再利用なのでスキップする
-+    if (prev && prev !== chat_id && prev !== newTarget) void archiveProgressThread(prev)
++    // - ptFile 上書き後に行うため watch.ts は新宛先を読むようになり 古い prev への POST が止まる
++    // - prev が次の宛先 (chat_id) や新スレッド ID (newTarget) と同じ場合はスレッド再利用なのでスキップする
++    // - notify.ts は progressChannelId() を local cid に capture した後で fetch を await するため
++    //   ptFile 上書き直前に cid = 旧 prev を capture した watch iteration が遅れて POST を完了させると
++    //   Discord の自動 unarchive で前スレッドが再アクティブ化される (Codex P2 5 巡目指摘 2026-06-22)
++    //   watch 周期 (250ms) を十分超える遅延 (3 秒) を入れることで in-flight POST の完了を待つ
++    if (prev && prev !== chat_id && prev !== newTarget) {
++      const target = prev
++      const tid = setTimeout(() => { void archiveProgressThread(target) }, 3_000)
++      tid.unref?.()
++    }
    }
  
    // Ack reaction — lets the user know we're processing. Fire-and-forget.
-@@ -890,8 +1168,60 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -890,8 +1181,60 @@ async function handleInbound(msg: Message): Promise<void> {
    })
  }
  

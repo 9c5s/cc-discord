@@ -1,5 +1,5 @@
 diff --git a/server.ts b/server.ts
-index 0595fc7..d91576a 100644
+index 0595fc7..2794513 100644
 --- a/server.ts
 +++ b/server.ts
 @@ -63,6 +63,35 @@ if (!TOKEN) {
@@ -157,17 +157,15 @@ index 0595fc7..d91576a 100644
                ...(i === 0 && files.length > 0 ? { files } : {}),
                ...(shouldReplyTo
                  ? { reply: { messageReference: reply_to, failIfNotExists: false } }
-@@ -652,6 +764,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+@@ -652,6 +764,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
            sentIds.length === 1
              ? `sent (id: ${sentIds[0]})`
              : `sent ${sentIds.length} parts (ids: ${sentIds.join(', ')})`
 +
-+        // 進捗スレッドの archive は handleInbound 側に一本化する (cc-discord パッチ F)
-+        // MCP ツール呼び出し時点では並走 inbound の上書きと完全紐付けできないため
          return { content: [{ type: 'text', text: result }] }
        }
        case 'fetch_messages': {
-@@ -686,7 +801,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+@@ -686,7 +799,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
        case 'edit_message': {
          const ch = await fetchAllowedChannel(args.chat_id as string)
          const msg = await ch.messages.fetch(args.message_id as string)
@@ -177,39 +175,47 @@ index 0595fc7..d91576a 100644
          return { content: [{ type: 'text', text: `edited (id: ${edited.id})` }] }
        }
        case 'download_attachment': {
-@@ -802,6 +918,31 @@ client.on('interactionCreate', async (interaction: Interaction) => {
+@@ -802,6 +916,39 @@ client.on('interactionCreate', async (interaction: Interaction) => {
      .catch(() => {})
  })
  
-+// progress thread を明示 archive する (cc-discord パッチ F)
-+// Discord の autoArchiveDuration が API レベルで発火しないケースが実測されたため
-+// bot 自身が作った未 archived スレッドのみを対象にする
-+// (ユーザー作成スレッドや channel ID 等は判定で弾く)
-+async function archiveProgressThread(target: string): Promise<void> {
-+  if (!target) return
-+  try {
-+    const ch = await client.channels.fetch(target)
-+    const t = ch as any
-+    if (!t || typeof t.isThread !== 'function' || !t.isThread()) return
-+    if (t.archived !== false) return
-+    const myId = client.user?.id
-+    if (!myId || t.ownerId !== myId) return
-+    await t.setArchived(true, 'cc-discord progress thread done')
-+  } catch { /* 削除済み 権限不足 スレッド以外は無視 */ }
++// 定期的に stale な progress thread を一括 archive する (cc-discord パッチ F)
++// Discord の autoArchiveDuration (60 分) が API レベルで発火しないケースが実測されたため
++// 並行 inbound や watch の in-flight POST と競合しないよう
++// 「最終メッセージから 60 分以上 inactive で archived=false」のスレッドだけを対象にする
++// 誤対象を防ぐため owner_id == bot + 名前パターン + autoArchiveDuration == 60 の AND で絞る
++const PROGRESS_THREAD_STALE_MS = 60 * 60 * 1000
++const PROGRESS_THREAD_NAME_RE = /^\[\d{2}\/\d{2} \d{2}:\d{2}\] /
++const DISCORD_EPOCH_MS = 1420070400000n
++
++function snowflakeMs(id: string): number {
++  return Number((BigInt(id) >> 22n) + DISCORD_EPOCH_MS)
 +}
 +
-+function readProgressTarget(): string | null {
-+  if (!OWNER_NAME) return null
-+  try {
-+    const v = readFileSync(join(STATE_DIR, 'progress-thread', OWNER_NAME), 'utf8').trim()
-+    return v || null
-+  } catch { return null }
++async function archiveStaleProgressThreads(): Promise<void> {
++  const me = client.user?.id
++  if (!me) return
++  const now = Date.now()
++  for (const guild of client.guilds.cache.values()) {
++    const active = await guild.channels.fetchActiveThreads().catch(() => null)
++    if (!active) continue
++    for (const t of active.threads.values()) {
++      const tt = t as any
++      if (tt.archived !== false) continue
++      if (tt.ownerId !== me) continue
++      if (!PROGRESS_THREAD_NAME_RE.test(t.name ?? '')) continue
++      if (tt.autoArchiveDuration !== 60) continue
++      const lastMs = t.lastMessageId ? snowflakeMs(t.lastMessageId) : (t.createdTimestamp ?? 0)
++      if (now - lastMs < PROGRESS_THREAD_STALE_MS) continue
++      await tt.setArchived(true, 'cc-discord progress stale cleanup').catch(() => {})
++    }
++  }
 +}
 +
  client.on('messageCreate', msg => {
    if (msg.author.bot) return
    handleInbound(msg).catch(e => process.stderr.write(`discord: handleInbound failed: ${e}\n`))
-@@ -848,9 +989,123 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -848,9 +995,81 @@ async function handleInbound(msg: Message): Promise<void> {
      return
    }
  
@@ -257,32 +263,11 @@ index 0595fc7..d91576a 100644
 +      // それ以外 (dir 不在等) はロック機構が使えないだけなので従来どおり続行する
 +    }
 +
-+    // owner-level の ptFile 排他ロック (cc-discord パッチ F)
-+    // anchor + startThread の await 前に取り inbound 順を保つ (完了順だと早い inbound が遅れて
-+    // 後発の thread を archive する順序逆転が起きる)
-+    // 取得失敗は 3 秒で諦めてロック無しで続行する
-+    const writeLockFile = join(ptDir, `${OWNER_NAME}.write-lock`)
-+    let writeLockHeld = false
-+    for (let i = 0; i < 30; i++) {
-+      try {
-+        writeFileSync(writeLockFile, String(process.pid), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-+        writeLockHeld = true
-+        break
-+      } catch (err) {
-+        if ((err as { code?: string }).code !== 'EEXIST') break
-+        try {
-+          if (Date.now() - statSync(writeLockFile).mtimeMs > 30_000) {
-+            rmSync(writeLockFile, { force: true })
-+            continue
-+          }
-+        } catch { /* 競合は無害 */ }
-+        await new Promise(r => setTimeout(r, 100))
++    if (msg.channel.type === ChannelType.DM) {
++      try { writeFileSync(ptFile, chat_id, { encoding: 'utf8', mode: 0o600 }) } catch (err) {
++        process.stderr.write(`discord channel: failed to write progress-thread (DM): ${err}\n`)
 +      }
-+    }
-+
-+    // 新宛先の決定 (DM/else は chat_id、guild は anchor + startThread)
-+    let newTarget = chat_id
-+    if (msg.channel.type !== ChannelType.DM && 'threads' in msg.channel) {
++    } else if ('threads' in msg.channel) {
 +      // スレッド名: [MM/DD HH:MM] + 本文 (空白正規化 80字超は79字+… コードポイント単位)
 +      const pad = (n: number) => String(n).padStart(2, '0')
 +      const dt = msg.createdAt
@@ -304,39 +289,18 @@ index 0595fc7..d91576a 100644
 +          autoArchiveDuration: 60,
 +          reason: 'cc-discord progress streaming',
 +        })
-+        newTarget = thread.id
++        writeFileSync(ptFile, thread.id, { encoding: 'utf8', mode: 0o600 })
 +      } catch (err) {
 +        process.stderr.write(`discord channel: failed to create progress thread: ${err}\n`)
++        try { writeFileSync(ptFile, chat_id, { encoding: 'utf8', mode: 0o600 }) } catch { /* 完全失敗時は次の inbound で再試行される */ }
 +      }
-+    }
-+
-+    // ロック中で prev 読み + ptFile 上書き (同期 I/O のみ)
-+    let prev = ''
-+    try { prev = readFileSync(ptFile, 'utf8').trim() } catch { /* 無ければ '' */ }
-+    try {
-+      writeFileSync(ptFile, newTarget, { encoding: 'utf8', mode: 0o600 })
-+    } catch (err) {
-+      process.stderr.write(`discord channel: failed to write progress-thread: ${err}\n`)
-+    }
-+
-+    if (writeLockHeld) {
-+      try { rmSync(writeLockFile, { force: true }) } catch { /* 解放失敗は次の stale 掃除で回収 */ }
-+    }
-+
-+    // 古い prev を archive (cc-discord パッチ F)
-+    // ptFile 上書き後に呼ぶ + watch 周期 (250ms) を超える 3 秒の遅延で in-flight POST 完了を待つ
-+    // (notify.ts は progressChannelId() を capture してから fetch await するため即 archive すると
-+    //  archived スレッドへの遅延 POST で auto-unarchive される)
-+    // prev が新宛先と同じ (スレッド再利用) ケースはスキップする
-+    if (prev && prev !== chat_id && prev !== newTarget) {
-+      const target = prev
-+      const tid = setTimeout(() => { void archiveProgressThread(target) }, 3_000)
-+      tid.unref?.()
++    } else {
++      try { writeFileSync(ptFile, chat_id, { encoding: 'utf8', mode: 0o600 }) } catch { /* 同上 */ }
 +    }
    }
  
    // Ack reaction — lets the user know we're processing. Fire-and-forget.
-@@ -890,8 +1145,60 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -890,8 +1109,65 @@ async function handleInbound(msg: Message): Promise<void> {
    })
  }
  
@@ -395,6 +359,11 @@ index 0595fc7..d91576a 100644
 +  // /discord:access による許可追加やチャンネル改名を再起動なしで拾うための定期再解決
 +  const timer = setInterval(() => resolveOwnedChannel(c), 60_000)
 +  ;(timer as any).unref?.()
++  // 5 分毎に stale な progress thread を archive する (cc-discord パッチ F)
++  // 起動直後にも 1 回走らせて滞留分を即対応する
++  void archiveStaleProgressThreads()
++  const staleTimer = setInterval(() => { void archiveStaleProgressThreads() }, 5 * 60_000)
++  ;(staleTimer as any).unref?.()
  })
  
  client.login(TOKEN).catch(err => {

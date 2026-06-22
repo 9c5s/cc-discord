@@ -1,5 +1,5 @@
 diff --git a/server.ts b/server.ts
-index 0595fc7..103a8a1 100644
+index 0595fc7..ee0606b 100644
 --- a/server.ts
 +++ b/server.ts
 @@ -63,6 +63,35 @@ if (!TOKEN) {
@@ -175,16 +175,18 @@ index 0595fc7..103a8a1 100644
          return { content: [{ type: 'text', text: `edited (id: ${edited.id})` }] }
        }
        case 'download_attachment': {
-@@ -802,6 +916,52 @@ client.on('interactionCreate', async (interaction: Interaction) => {
+@@ -802,6 +916,54 @@ client.on('interactionCreate', async (interaction: Interaction) => {
      .catch(() => {})
  })
  
 +// 定期的に stale な progress thread を一括 archive する (cc-discord パッチ F)
 +// Discord の autoArchiveDuration (60 分) が API レベルで発火しないケースが実測されたため
 +// 並行 inbound や watch の in-flight POST と競合しないよう
-+// 「最終メッセージから 60 分以上 inactive で archived=false」のスレッドだけを対象にする
++// 「最終メッセージから 12 時間以上 inactive で archived=false」のスレッドだけを対象にする
++// Discord 標準 (60 分) より大きく取ることで active turn 中の長い shell/build と
++// scanner/handleInbound の write race を実質的に避ける
 +// 誤対象を防ぐため owner_id == bot + 名前パターン + autoArchiveDuration == 60 の AND で絞る
-+const PROGRESS_THREAD_STALE_MS = 60 * 60 * 1000
++const PROGRESS_THREAD_STALE_MS = 12 * 60 * 60 * 1000
 +const PROGRESS_THREAD_NAME_RE = /^\[\d{2}\/\d{2} \d{2}:\d{2}\] /
 +const DISCORD_EPOCH_MS = 1420070400000n
 +
@@ -228,7 +230,7 @@ index 0595fc7..103a8a1 100644
  client.on('messageCreate', msg => {
    if (msg.author.bot) return
    handleInbound(msg).catch(e => process.stderr.write(`discord: handleInbound failed: ${e}\n`))
-@@ -848,9 +1008,81 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -848,9 +1010,81 @@ async function handleInbound(msg: Message): Promise<void> {
      return
    }
  
@@ -313,7 +315,7 @@ index 0595fc7..103a8a1 100644
    }
  
    // Ack reaction — lets the user know we're processing. Fire-and-forget.
-@@ -890,8 +1122,65 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -890,8 +1124,65 @@ async function handleInbound(msg: Message): Promise<void> {
    })
  }
  

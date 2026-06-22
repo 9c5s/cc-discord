@@ -1,5 +1,5 @@
 diff --git a/server.ts b/server.ts
-index 0595fc7..8e96da5 100644
+index 0595fc7..43bb3ad 100644
 --- a/server.ts
 +++ b/server.ts
 @@ -63,6 +63,35 @@ if (!TOKEN) {
@@ -119,7 +119,7 @@ index 0595fc7..8e96da5 100644
    if (isDM) {
      if (access.allowFrom.includes(senderId)) return { action: 'deliver', access }
      if (access.dmPolicy === 'allowlist') return { action: 'drop' }
-@@ -604,6 +700,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+@@ -604,9 +700,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
      switch (req.params.name) {
        case 'reply': {
          const chat_id = args.chat_id as string
@@ -127,7 +127,14 @@ index 0595fc7..8e96da5 100644
          const text = args.text as string
          const reply_to = args.reply_to as string | undefined
          const files = (args.files as string[] | undefined) ?? []
-@@ -624,7 +721,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
++        // 進捗スレッドのアクティブクローズ用 target をここで capture する (cc-discord パッチ F)
++        // reply 完了時に readProgressTarget() を再度呼ぶと 並走する後続 inbound が
++        // 上書きした新スレッド ID を読んで誤って閉じてしまうため target は reply 単位で固定する
++        const ptCaptured = readProgressTarget()
+ 
+         const ch = await fetchAllowedChannel(chat_id)
+         if (!('send' in ch)) throw new Error('channel is not sendable')
+@@ -624,7 +725,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
          const limit = Math.max(1, Math.min(access.textChunkLimit ?? MAX_CHUNK_LIMIT, MAX_CHUNK_LIMIT))
          const mode = access.chunkMode ?? 'length'
          const replyMode = access.replyToMode ?? 'first'
@@ -147,7 +154,7 @@ index 0595fc7..8e96da5 100644
          const sentIds: string[] = []
  
          try {
-@@ -635,6 +744,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+@@ -635,6 +748,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
                (replyMode === 'all' || i === 0)
              const sent = await ch.send({
                content: chunks[i],
@@ -157,7 +164,7 @@ index 0595fc7..8e96da5 100644
                ...(i === 0 && files.length > 0 ? { files } : {}),
                ...(shouldReplyTo
                  ? { reply: { messageReference: reply_to, failIfNotExists: false } }
-@@ -652,6 +764,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+@@ -652,6 +768,26 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
            sentIds.length === 1
              ? `sent (id: ${sentIds[0]})`
              : `sent ${sentIds.length} parts (ids: ${sentIds.join(', ')})`
@@ -166,13 +173,25 @@ index 0595fc7..8e96da5 100644
 +        // Discord の auto archive が API レベルで発火しないため
 +        // reply で会話が締まったタイミングで明示アーカイブする
 +        // fire-and-forget で reply 本体の返却を待たせない
-+        const ptTarget = readProgressTarget()
-+        if (ptTarget) void archiveProgressThread(ptTarget)
++        // 次 inbound 時の archiveProgressThread 再呼び出し (無駄な channels.fetch) を防ぐため
++        // 同期的に progress-thread/<owner> を rmSync する ただし後続 inbound が既に新しい
++        // スレッド ID を書き込んでいる場合に消すと宛先を失うため 現在値が capture と
++        // 一致する場合に限定する 削除と read はいずれも同期処理で非同期 archive とは独立
++        if (ptCaptured) {
++          void archiveProgressThread(ptCaptured)
++          if (OWNER_NAME) {
++            try {
++              const ptFile = join(STATE_DIR, 'progress-thread', OWNER_NAME)
++              const cur = readFileSync(ptFile, 'utf8').trim()
++              if (cur === ptCaptured) rmSync(ptFile, { force: true })
++            } catch { /* 無い 読めない 競合 はいずれも害が無いので無視する */ }
++          }
++        }
 +
          return { content: [{ type: 'text', text: result }] }
        }
        case 'fetch_messages': {
-@@ -686,7 +806,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+@@ -686,7 +822,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
        case 'edit_message': {
          const ch = await fetchAllowedChannel(args.chat_id as string)
          const msg = await ch.messages.fetch(args.message_id as string)
@@ -182,7 +201,7 @@ index 0595fc7..8e96da5 100644
          return { content: [{ type: 'text', text: `edited (id: ${edited.id})` }] }
        }
        case 'download_attachment': {
-@@ -802,6 +923,35 @@ client.on('interactionCreate', async (interaction: Interaction) => {
+@@ -802,6 +939,35 @@ client.on('interactionCreate', async (interaction: Interaction) => {
      .catch(() => {})
  })
  
@@ -218,7 +237,7 @@ index 0595fc7..8e96da5 100644
  client.on('messageCreate', msg => {
    if (msg.author.bot) return
    handleInbound(msg).catch(e => process.stderr.write(`discord: handleInbound failed: ${e}\n`))
-@@ -848,9 +998,95 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -848,9 +1014,95 @@ async function handleInbound(msg: Message): Promise<void> {
      return
    }
  
@@ -317,7 +336,7 @@ index 0595fc7..8e96da5 100644
    }
  
    // Ack reaction — lets the user know we're processing. Fire-and-forget.
-@@ -890,8 +1126,60 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -890,8 +1142,60 @@ async function handleInbound(msg: Message): Promise<void> {
    })
  }
  

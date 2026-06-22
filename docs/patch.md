@@ -189,22 +189,21 @@ cc-discord 側で進捗の流れが止まる契機に明示的に `setArchived(t
 
 ### 接続点
 
-- reply ハンドラ末尾: 返信完了 = 会話が締まったタイミングで、`progress-thread/<OWNER_NAME>` を読んで対応スレッドをアーカイブ
-- 新規 inbound のスレッド作成直前: 既存値があれば先に閉じてから新スレッドを作る (reply されずに次の入力が来た中断ケースの救済)
+- 新規 inbound のスレッド作成 (または次宛先の書き込み) 直前: 既存の `progress-thread/<OWNER_NAME>` を読み、archive 可能なら閉じてから新規宛先で上書きする (reply されずに次の入力が来た中断ケースの救済)。
+- reply 経路は archive を行わない (理由は下記の注意点を参照)。
 
-両方とも `archiveProgressThread()` を呼ぶ。対象がスレッドでない (DM channel ID や親 channel ID のフォールバック) 場合は `channels.fetch + isThread()` で弾き no-op。`archived=true` の重複呼び出しも `archived === false` ガードで no-op。fire-and-forget で reply 本体の返却は待たせない。
+`archiveProgressThread()` 内部で `channels.fetch + isThread()` を実行し、対象がスレッドでない (DM channel ID や親 channel ID のフォールバック) 場合は no-op。`archived=true` の重複呼び出しも `archived === false` ガードで no-op。fire-and-forget で handleInbound 本体の進行を待たせない。
 
 ### 注意すべきポイント
 
 - **対象判定はファイル内容に依存しない**: `progress-thread/<OWNER_NAME>` にはスレッド ID か DM/親チャンネル ID が混在し得るが、`channels.fetch + isThread()` でスレッド以外を弾けるため種別管理は不要。
-- **失敗は全て無視する**: 削除済み、権限不足、スレッド以外、はいずれもユーザー視認可能な悪影響が無いため stderr にも出さず黙る (reply は既に成功しているため余計なノイズを避ける)。
+- **失敗は全て無視する**: 削除済み、権限不足、スレッド以外、はいずれもユーザー視認可能な悪影響が無いため stderr にも出さず黙る。
 - **bot 自身が作成者なら setArchived 可**: Discord 仕様としてスレッド作成者は管理権限なしでも自分のスレッドをアーカイブできる。anchor からの `startThread` 経由なので bot が作成者扱い。
-- **reply 経路は target を reply 単位で capture する**: reply 完了時に `readProgressTarget()` を再度呼ぶと、reply 処理中に並走した後続 inbound が `progress-thread/<OWNER_NAME>` を新しいスレッド ID で上書きしているケースで、まだ進捗を受信中の新スレッドを誤って閉じてしまう (2026-06-22 PR #4 レビューで指摘)。reply ハンドラ冒頭で `ptCaptured = readProgressTarget()` を取り、完了時に capture を保持する。
-- **reply 時 archive は capture と現在値の一致時のみ実行する**: capture 取得は MCP ツール呼び出し時点であり、その時点で既に並走 inbound が新スレッドへ ptFile を上書きしている可能性がある (Codex P2 2 巡目指摘 2026-06-22)。capture を無条件 archive すると進行中の新スレッドを閉じうるため、reply 完了時に再度 `readFileSync(ptFile)` した現在値が capture と同じ場合のみ archive + rmSync する。並走 inbound 経路の archive は handleInbound 側で行われるため、不一致時に reply 経路が何もしなくても古いスレッドは残らない。
+- **reply 経路では archive しない**: 当初は reply 完了時に capture した target を archive する設計だったが、capture 取得 (MCP ツール呼び出し時点) より前に並走 inbound が新スレッド ID を ptFile に書き込んでいた場合、capture も現在値も新スレッド ID になり、capture==現在値ガードでは検知できず進行中の新スレッドを誤って閉じる (Codex P2 3 巡目指摘 2026-06-22)。MCP インターフェースに inbound 単位の thread ID を渡す経路が無いため、安全側に倒して reply 経路の archive を廃止し、archive は handleInbound 側 (次 inbound 宛先上書き直前) に一本化した。トレードオフ: 単発で完結した会話のスレッドは次 inbound が来るまで残るが、連続 inbound では確実に閉じられ Discord の auto archive 不発状態より滞留は確実に減る。
 - **handleInbound 側の archive は分岐の前で行う**: 旧版は `'threads' in msg.channel` ブロック内に置いていたが、次の inbound が DM や threads マネージャを持たないチャンネル種別の場合に archive 経路がスキップされ、前の guild progress スレッドが ptFile 上書きで紐付けを失い滞留する (Codex P2 2 巡目指摘 2026-06-22)。DM/thread/else 分岐の手前、ptFile が次の宛先で上書きされる前に必ず archive を呼ぶ。
-- **過去の滞留スレッドは別スクリプトで一括クローズ**: 本パッチは新規分のみ救う。既存の滞留は `scripts/archive-stale-threads.mjs` (owner_id=bot + 名前パターン + autoArchiveDuration=60 の 3 条件 AND で絞る dry-run 既定スクリプト) で掃除する。bot 参加 guild の active threads 全体をスキャンするため routes/* 範囲外の他チャンネルでも対応できる。
+- **prev が次の chat_id と同じ場合は archive をスキップする**: スレッド内連続 inbound のように prev (= 現在の progress-thread) と新しい宛先 chat_id が同じ ID になるケースでは、archive 後に同じ ID で上書きされる結果 watcher が archived スレッドへ POST し続ける (Codex P2 3 巡目指摘 2026-06-22)。`prev && prev !== chat_id` を archive 条件とする。新規スレッド作成パスでは新スレッド ID が startThread 後にしか分からないが、prev と偶然一致する確率は無視できる。
+- **過去の滞留スレッドは API レベルで一括 setArchived**: 本パッチは新規分のみ救う。既存の滞留 (Discord auto archive 不発で残ったもの) は運用者側で API レベルの `setArchived(true)` を一括投げる必要がある。判定は「owner_id=bot + 名前パターン + autoArchiveDuration=60 の 3 条件 AND」が安全で、bot 参加 guild の active threads 全体をスキャンすれば routes/* 範囲外の他チャンネルでも対応できる。
 
 ### 関連
 
-- `scripts/archive-stale-threads.mjs` (滞留分の一括掃除スクリプト)
 - メモリ: `cc-discord-channel-enhancements-plan` (本リポジトリの全体設計)

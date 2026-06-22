@@ -123,7 +123,7 @@ index 0595fc7..2794513 100644
      switch (req.params.name) {
        case 'reply': {
          const chat_id = args.chat_id as string
-+        clearTyping(chat_id)
++        stopTyping(chat_id)
          const text = args.text as string
          const reply_to = args.reply_to as string | undefined
          const files = (args.files as string[] | undefined) ?? []
@@ -257,7 +257,7 @@ index 0595fc7..2794513 100644
 +      // EEXIST は他プロセスがこの inbound を取得済み (そのプロセスがスレッドを作り inbound も処理する)
 +      // 敗者が処理を続けると同じメッセージへ二重に応答するため typing を止めて inbound ごと破棄する
 +      if ((err as { code?: string }).code === 'EEXIST') {
-+        clearTyping(chat_id)
++        stopTyping(chat_id)
 +        return
 +      }
 +      // それ以外 (dir 不在等) はロック機構が使えないだけなので従来どおり続行する

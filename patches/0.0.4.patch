@@ -1,5 +1,5 @@
 diff --git a/server.ts b/server.ts
-index 0595fc7..6295d5f 100644
+index 0595fc7..8e96da5 100644
 --- a/server.ts
 +++ b/server.ts
 @@ -63,6 +63,35 @@ if (!TOKEN) {
@@ -157,7 +157,22 @@ index 0595fc7..6295d5f 100644
                ...(i === 0 && files.length > 0 ? { files } : {}),
                ...(shouldReplyTo
                  ? { reply: { messageReference: reply_to, failIfNotExists: false } }
-@@ -686,7 +798,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+@@ -652,6 +764,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+           sentIds.length === 1
+             ? `sent (id: ${sentIds[0]})`
+             : `sent ${sentIds.length} parts (ids: ${sentIds.join(', ')})`
++
++        // 進捗スレッドのアクティブクローズ (cc-discord パッチ F)
++        // Discord の auto archive が API レベルで発火しないため
++        // reply で会話が締まったタイミングで明示アーカイブする
++        // fire-and-forget で reply 本体の返却を待たせない
++        const ptTarget = readProgressTarget()
++        if (ptTarget) void archiveProgressThread(ptTarget)
++
+         return { content: [{ type: 'text', text: result }] }
+       }
+       case 'fetch_messages': {
+@@ -686,7 +806,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
        case 'edit_message': {
          const ch = await fetchAllowedChannel(args.chat_id as string)
          const msg = await ch.messages.fetch(args.message_id as string)
@@ -167,7 +182,43 @@ index 0595fc7..6295d5f 100644
          return { content: [{ type: 'text', text: `edited (id: ${edited.id})` }] }
        }
        case 'download_attachment': {
-@@ -848,9 +961,88 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -802,6 +923,35 @@ client.on('interactionCreate', async (interaction: Interaction) => {
+     .catch(() => {})
+ })
+ 
++// --- progress thread のアクティブクローズ (cc-discord パッチ F) ---
++// Discord 側の autoArchiveDuration (60 分) が API レベルで発火しないケースが実測されたため
++// (archived=false のまま 4 日以上滞留する事例を確認) 進捗の流れが止まる
++// reply 完了時と 次 inbound の新規スレッド作成直前で明示的にアーカイブする
++// progress-thread/<OWNER_NAME> にはスレッド ID か DM/親チャンネル ID が書かれているが
++// channels.fetch + isThread() でスレッド以外を弾けるためファイル内容の種別判定は不要
++async function archiveProgressThread(target: string): Promise<void> {
++  if (!target) return
++  try {
++    const ch = await client.channels.fetch(target)
++    const t = ch as any
++    if (t && typeof t.isThread === 'function' && t.isThread() && t.archived === false) {
++      await t.setArchived(true, 'cc-discord progress thread done')
++    }
++  } catch {
++    // 削除済み 権限不足 スレッド以外はいずれも無害なので無視する
++  }
++}
++
++// progress-thread/<OWNER_NAME> から現在の宛先 ID を読み出す
++// 無い 読めない 空 は null を返す
++function readProgressTarget(): string | null {
++  if (!OWNER_NAME) return null
++  try {
++    const v = readFileSync(join(STATE_DIR, 'progress-thread', OWNER_NAME), 'utf8').trim()
++    return v || null
++  } catch { return null }
++}
++
+ client.on('messageCreate', msg => {
+   if (msg.author.bot) return
+   handleInbound(msg).catch(e => process.stderr.write(`discord: handleInbound failed: ${e}\n`))
+@@ -848,9 +998,95 @@ async function handleInbound(msg: Message): Promise<void> {
      return
    }
  
@@ -220,6 +271,13 @@ index 0595fc7..6295d5f 100644
 +        process.stderr.write(`discord channel: failed to write progress-thread (DM): ${err}\n`)
 +      }
 +    } else if ('threads' in msg.channel) {
++      // 古い progress-thread を先に閉じる (cc-discord パッチ F)
++      // reply されずに次の inbound が来た中断ケースを救う
++      // ファイル不在や channel ID (スレッド作成失敗時のフォールバック) は archive 側で no-op
++      try {
++        const prev = readFileSync(ptFile, 'utf8').trim()
++        if (prev) void archiveProgressThread(prev)
++      } catch { /* 無ければスキップ */ }
 +      // スレッド名: [MM/DD HH:MM] + 本文(空白正規化, 80字超は79字+…, 空は progress)
 +      // cc-discord plugin/src/summarize.ts の threadName() と同じロジックをインライン化している
 +      const pad = (n: number) => String(n).padStart(2, '0')
@@ -259,7 +317,7 @@ index 0595fc7..6295d5f 100644
    }
  
    // Ack reaction — lets the user know we're processing. Fire-and-forget.
-@@ -890,8 +1082,60 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -890,8 +1126,60 @@ async function handleInbound(msg: Message): Promise<void> {
    })
  }
  

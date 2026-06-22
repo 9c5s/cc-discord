@@ -1,5 +1,5 @@
 diff --git a/server.ts b/server.ts
-index 0595fc7..2794513 100644
+index 0595fc7..103a8a1 100644
 --- a/server.ts
 +++ b/server.ts
 @@ -63,6 +63,35 @@ if (!TOKEN) {
@@ -175,7 +175,7 @@ index 0595fc7..2794513 100644
          return { content: [{ type: 'text', text: `edited (id: ${edited.id})` }] }
        }
        case 'download_attachment': {
-@@ -802,6 +916,39 @@ client.on('interactionCreate', async (interaction: Interaction) => {
+@@ -802,6 +916,52 @@ client.on('interactionCreate', async (interaction: Interaction) => {
      .catch(() => {})
  })
  
@@ -193,29 +193,42 @@ index 0595fc7..2794513 100644
 +}
 +
 +async function archiveStaleProgressThreads(): Promise<void> {
++  // 担当チャンネル未確定のセッションは scan しない 同 bot トークンで並走する複数 OWNER_NAME
++  // セッションがいる場合 各自が全 guild を fetchActiveThreads すると rate limit に当たるため
++  // self の owned channel 配下だけを見る
++  if (!OWNER_NAME || ROUTING_BROKEN || ownedChannelId === null) return
 +  const me = client.user?.id
 +  if (!me) return
++  const ch = client.channels.cache.get(ownedChannelId)
++    ?? await client.channels.fetch(ownedChannelId).catch(() => null)
++  if (!ch || !('threads' in ch)) return
++  const active = await (ch as any).threads.fetchActive().catch(() => null)
++  if (!active) return
 +  const now = Date.now()
-+  for (const guild of client.guilds.cache.values()) {
-+    const active = await guild.channels.fetchActiveThreads().catch(() => null)
-+    if (!active) continue
-+    for (const t of active.threads.values()) {
-+      const tt = t as any
-+      if (tt.archived !== false) continue
-+      if (tt.ownerId !== me) continue
-+      if (!PROGRESS_THREAD_NAME_RE.test(t.name ?? '')) continue
-+      if (tt.autoArchiveDuration !== 60) continue
-+      const lastMs = t.lastMessageId ? snowflakeMs(t.lastMessageId) : (t.createdTimestamp ?? 0)
-+      if (now - lastMs < PROGRESS_THREAD_STALE_MS) continue
-+      await tt.setArchived(true, 'cc-discord progress stale cleanup').catch(() => {})
-+    }
++  const ptFile = join(STATE_DIR, 'progress-thread', OWNER_NAME)
++  for (const t of active.threads.values()) {
++    const tt = t as any
++    if (tt.archived !== false) continue
++    if (tt.ownerId !== me) continue
++    if (!PROGRESS_THREAD_NAME_RE.test(t.name ?? '')) continue
++    if (tt.autoArchiveDuration !== 60) continue
++    const lastMs = t.lastMessageId ? snowflakeMs(t.lastMessageId) : (t.createdTimestamp ?? 0)
++    if (now - lastMs < PROGRESS_THREAD_STALE_MS) continue
++    // archive 対象が現在の progress-thread file と一致するなら先に file を消す
++    // notify は ptFile を毎回読むため 消さないと archived thread へ post して unarchive を招く
++    try {
++      if (readFileSync(ptFile, 'utf8').trim() === t.id) {
++        rmSync(ptFile, { force: true })
++      }
++    } catch { /* file 不在等は無視 */ }
++    await tt.setArchived(true, 'cc-discord progress stale cleanup').catch(() => {})
 +  }
 +}
 +
  client.on('messageCreate', msg => {
    if (msg.author.bot) return
    handleInbound(msg).catch(e => process.stderr.write(`discord: handleInbound failed: ${e}\n`))
-@@ -848,9 +995,81 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -848,9 +1008,81 @@ async function handleInbound(msg: Message): Promise<void> {
      return
    }
  
@@ -300,7 +313,7 @@ index 0595fc7..2794513 100644
    }
  
    // Ack reaction — lets the user know we're processing. Fire-and-forget.
-@@ -890,8 +1109,65 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -890,8 +1122,65 @@ async function handleInbound(msg: Message): Promise<void> {
    })
  }
  

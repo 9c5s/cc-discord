@@ -1,5 +1,5 @@
 diff --git a/server.ts b/server.ts
-index 0595fc7..43bb3ad 100644
+index 0595fc7..75cf48e 100644
 --- a/server.ts
 +++ b/server.ts
 @@ -63,6 +63,35 @@ if (!TOKEN) {
@@ -164,7 +164,7 @@ index 0595fc7..43bb3ad 100644
                ...(i === 0 && files.length > 0 ? { files } : {}),
                ...(shouldReplyTo
                  ? { reply: { messageReference: reply_to, failIfNotExists: false } }
-@@ -652,6 +768,26 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+@@ -652,6 +768,27 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
            sentIds.length === 1
              ? `sent (id: ${sentIds[0]})`
              : `sent ${sentIds.length} parts (ids: ${sentIds.join(', ')})`
@@ -172,26 +172,27 @@ index 0595fc7..43bb3ad 100644
 +        // 進捗スレッドのアクティブクローズ (cc-discord パッチ F)
 +        // Discord の auto archive が API レベルで発火しないため
 +        // reply で会話が締まったタイミングで明示アーカイブする
-+        // fire-and-forget で reply 本体の返却を待たせない
-+        // 次 inbound 時の archiveProgressThread 再呼び出し (無駄な channels.fetch) を防ぐため
-+        // 同期的に progress-thread/<owner> を rmSync する ただし後続 inbound が既に新しい
-+        // スレッド ID を書き込んでいる場合に消すと宛先を失うため 現在値が capture と
-+        // 一致する場合に限定する 削除と read はいずれも同期処理で非同期 archive とは独立
-+        if (ptCaptured) {
-+          void archiveProgressThread(ptCaptured)
-+          if (OWNER_NAME) {
-+            try {
-+              const ptFile = join(STATE_DIR, 'progress-thread', OWNER_NAME)
-+              const cur = readFileSync(ptFile, 'utf8').trim()
-+              if (cur === ptCaptured) rmSync(ptFile, { force: true })
-+            } catch { /* 無い 読めない 競合 はいずれも害が無いので無視する */ }
-+          }
++        // capture と現在値の比較は archive と削除の両方の前提条件で 一致する場合のみ実行する
++        // - 一致 = capture 取得後に並走 inbound が無かった or 同じスレッドへの追加 inbound
++        //   この場合は capture が現在の宛先と同じなので archive + rmSync しても安全
++        // - 不一致 = 並走 inbound が新スレッドを立て ptFile を上書きした (= 既に handleInbound 側で
++        //   前スレッドは archive 済み) capture を archive すると進行中の新スレッドを誤って閉じうるため何もしない
++        // capture や cur の取得から比較までは同期処理で非同期 archive とは独立
++        if (ptCaptured && OWNER_NAME) {
++          try {
++            const ptFile = join(STATE_DIR, 'progress-thread', OWNER_NAME)
++            const cur = readFileSync(ptFile, 'utf8').trim()
++            if (cur === ptCaptured) {
++              void archiveProgressThread(ptCaptured)
++              try { rmSync(ptFile, { force: true }) } catch { /* 削除失敗は無害 */ }
++            }
++          } catch { /* 無い 読めない 競合 はいずれも害が無いので無視する */ }
 +        }
 +
          return { content: [{ type: 'text', text: result }] }
        }
        case 'fetch_messages': {
-@@ -686,7 +822,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
+@@ -686,7 +823,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
        case 'edit_message': {
          const ch = await fetchAllowedChannel(args.chat_id as string)
          const msg = await ch.messages.fetch(args.message_id as string)
@@ -201,7 +202,7 @@ index 0595fc7..43bb3ad 100644
          return { content: [{ type: 'text', text: `edited (id: ${edited.id})` }] }
        }
        case 'download_attachment': {
-@@ -802,6 +939,35 @@ client.on('interactionCreate', async (interaction: Interaction) => {
+@@ -802,6 +940,35 @@ client.on('interactionCreate', async (interaction: Interaction) => {
      .catch(() => {})
  })
  
@@ -237,7 +238,7 @@ index 0595fc7..43bb3ad 100644
  client.on('messageCreate', msg => {
    if (msg.author.bot) return
    handleInbound(msg).catch(e => process.stderr.write(`discord: handleInbound failed: ${e}\n`))
-@@ -848,9 +1014,95 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -848,9 +1015,98 @@ async function handleInbound(msg: Message): Promise<void> {
      return
    }
  
@@ -285,18 +286,21 @@ index 0595fc7..43bb3ad 100644
 +      // それ以外 (dir 不在等) はロック機構が使えないだけなので従来どおり続行する
 +    }
 +
++    // 古い progress-thread を先に閉じる (cc-discord パッチ F)
++    // reply されずに次の inbound が来た中断ケースを救う
++    // DM/thread/else どの分岐でも ptFile が次の宛先で上書きされる前に archive する必要がある
++    // (DM 分岐内に置くと次が thread でも前 thread の ID が失われる 逆も同じ Codex P2 指摘 2026-06-22)
++    // ファイル不在や channel ID (スレッド作成失敗時のフォールバック) は archive 側で no-op
++    try {
++      const prev = readFileSync(ptFile, 'utf8').trim()
++      if (prev) void archiveProgressThread(prev)
++    } catch { /* 無ければスキップ */ }
++
 +    if (msg.channel.type === ChannelType.DM) {
 +      try { writeFileSync(ptFile, chat_id, { encoding: 'utf8', mode: 0o600 }) } catch (err) {
 +        process.stderr.write(`discord channel: failed to write progress-thread (DM): ${err}\n`)
 +      }
 +    } else if ('threads' in msg.channel) {
-+      // 古い progress-thread を先に閉じる (cc-discord パッチ F)
-+      // reply されずに次の inbound が来た中断ケースを救う
-+      // ファイル不在や channel ID (スレッド作成失敗時のフォールバック) は archive 側で no-op
-+      try {
-+        const prev = readFileSync(ptFile, 'utf8').trim()
-+        if (prev) void archiveProgressThread(prev)
-+      } catch { /* 無ければスキップ */ }
 +      // スレッド名: [MM/DD HH:MM] + 本文(空白正規化, 80字超は79字+…, 空は progress)
 +      // cc-discord plugin/src/summarize.ts の threadName() と同じロジックをインライン化している
 +      const pad = (n: number) => String(n).padStart(2, '0')
@@ -336,7 +340,7 @@ index 0595fc7..43bb3ad 100644
    }
  
    // Ack reaction — lets the user know we're processing. Fire-and-forget.
-@@ -890,8 +1142,60 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -890,8 +1146,60 @@ async function handleInbound(msg: Message): Promise<void> {
    })
  }
  

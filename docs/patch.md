@@ -199,8 +199,9 @@ cc-discord 側で進捗の流れが止まる契機に明示的に `setArchived(t
 - **対象判定はファイル内容に依存しない**: `progress-thread/<OWNER_NAME>` にはスレッド ID か DM/親チャンネル ID が混在し得るが、`channels.fetch + isThread()` でスレッド以外を弾けるため種別管理は不要。
 - **失敗は全て無視する**: 削除済み、権限不足、スレッド以外、はいずれもユーザー視認可能な悪影響が無いため stderr にも出さず黙る (reply は既に成功しているため余計なノイズを避ける)。
 - **bot 自身が作成者なら setArchived 可**: Discord 仕様としてスレッド作成者は管理権限なしでも自分のスレッドをアーカイブできる。anchor からの `startThread` 経由なので bot が作成者扱い。
-- **reply 経路は target を reply 単位で capture する**: reply 完了時に `readProgressTarget()` を再度呼ぶと、reply 処理中に並走した後続 inbound が `progress-thread/<OWNER_NAME>` を新しいスレッド ID で上書きしているケースで、まだ進捗を受信中の新スレッドを誤って閉じてしまう (2026-06-22 PR #4 レビューで指摘)。reply ハンドラ冒頭で `ptCaptured = readProgressTarget()` を取り、完了時はその capture を archive する。これにより reply 単位での閉鎖対象が固定される。
-- **rmSync は capture と現在値が一致する場合のみ**: 次 inbound 時の `archiveProgressThread` 再呼び出し (無駄な `channels.fetch` 1 往復) を防ぐため、reply 完了時に同期的に `progress-thread/<OWNER_NAME>` を削除する。ただし後続 inbound が既に新しいスレッド ID を書き込んでいた場合に消すと notify が宛先を失うため、`readFileSync` した現在値が capture と一致する場合に限定する。`archiveProgressThread` 内部や `finally` で削除すると非同期遅延と新 inbound のファイル書き込みが競合する (古い `finally` が新ファイルを誤削除) ため、必ず同期パスで完結させる。
+- **reply 経路は target を reply 単位で capture する**: reply 完了時に `readProgressTarget()` を再度呼ぶと、reply 処理中に並走した後続 inbound が `progress-thread/<OWNER_NAME>` を新しいスレッド ID で上書きしているケースで、まだ進捗を受信中の新スレッドを誤って閉じてしまう (2026-06-22 PR #4 レビューで指摘)。reply ハンドラ冒頭で `ptCaptured = readProgressTarget()` を取り、完了時に capture を保持する。
+- **reply 時 archive は capture と現在値の一致時のみ実行する**: capture 取得は MCP ツール呼び出し時点であり、その時点で既に並走 inbound が新スレッドへ ptFile を上書きしている可能性がある (Codex P2 2 巡目指摘 2026-06-22)。capture を無条件 archive すると進行中の新スレッドを閉じうるため、reply 完了時に再度 `readFileSync(ptFile)` した現在値が capture と同じ場合のみ archive + rmSync する。並走 inbound 経路の archive は handleInbound 側で行われるため、不一致時に reply 経路が何もしなくても古いスレッドは残らない。
+- **handleInbound 側の archive は分岐の前で行う**: 旧版は `'threads' in msg.channel` ブロック内に置いていたが、次の inbound が DM や threads マネージャを持たないチャンネル種別の場合に archive 経路がスキップされ、前の guild progress スレッドが ptFile 上書きで紐付けを失い滞留する (Codex P2 2 巡目指摘 2026-06-22)。DM/thread/else 分岐の手前、ptFile が次の宛先で上書きされる前に必ず archive を呼ぶ。
 - **過去の滞留スレッドは別スクリプトで一括クローズ**: 本パッチは新規分のみ救う。既存の滞留は `scripts/archive-stale-threads.mjs` (owner_id=bot + 名前パターン + autoArchiveDuration=60 の 3 条件 AND で絞る dry-run 既定スクリプト) で掃除する。bot 参加 guild の active threads 全体をスキャンするため routes/* 範囲外の他チャンネルでも対応できる。
 
 ### 関連

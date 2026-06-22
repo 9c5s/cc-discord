@@ -1,5 +1,5 @@
 diff --git a/server.ts b/server.ts
-index 0595fc7..ed5f8ab 100644
+index 0595fc7..4d20711 100644
 --- a/server.ts
 +++ b/server.ts
 @@ -63,6 +63,35 @@ if (!TOKEN) {
@@ -219,7 +219,7 @@ index 0595fc7..ed5f8ab 100644
  client.on('messageCreate', msg => {
    if (msg.author.bot) return
    handleInbound(msg).catch(e => process.stderr.write(`discord: handleInbound failed: ${e}\n`))
-@@ -848,9 +999,100 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -848,9 +999,136 @@ async function handleInbound(msg: Message): Promise<void> {
      return
    }
  
@@ -267,22 +267,13 @@ index 0595fc7..ed5f8ab 100644
 +      // それ以外 (dir 不在等) はロック機構が使えないだけなので従来どおり続行する
 +    }
 +
-+    // 古い progress-thread を先に閉じる (cc-discord パッチ F)
-+    // reply されずに次の inbound が来た中断ケースを救う
-+    // DM/thread/else どの分岐でも ptFile が次の宛先で上書きされる前に archive する必要がある
-+    // (DM 分岐内に置くと次が thread でも前 thread の ID が失われる 逆も同じ Codex P2 指摘 2026-06-22)
-+    // ファイル不在や channel ID (スレッド作成失敗時のフォールバック) は archive 側で no-op
-+    // prev が次の宛先 (chat_id) と同じ場合はスレッド再利用 (例: スレッド内連続 inbound) のため archive をスキップする
-+    // (Codex P2 3 巡目指摘 2026-06-22 archive 後に同じ ID で上書きすると watcher が archived スレッドへ POST し続ける)
-+    try {
-+      const prev = readFileSync(ptFile, 'utf8').trim()
-+      if (prev && prev !== chat_id) void archiveProgressThread(prev)
-+    } catch { /* 無ければスキップ */ }
-+
++    // 新宛先を決定する (async 処理含む owner-level lock の外で実行する) (cc-discord パッチ F)
++    // - DM/else: 即 chat_id (channel ID)
++    // - thread: anchor + startThread の API 呼び出しを await し 結果のスレッド ID を採用
++    //   作成失敗時は chat_id にフォールバック
++    let newTarget = chat_id
 +    if (msg.channel.type === ChannelType.DM) {
-+      try { writeFileSync(ptFile, chat_id, { encoding: 'utf8', mode: 0o600 }) } catch (err) {
-+        process.stderr.write(`discord channel: failed to write progress-thread (DM): ${err}\n`)
-+      }
++      // newTarget = chat_id のまま
 +    } else if ('threads' in msg.channel) {
 +      // スレッド名: [MM/DD HH:MM] + 本文(空白正規化, 80字超は79字+…, 空は progress)
 +      // cc-discord plugin/src/summarize.ts の threadName() と同じロジックをインライン化している
@@ -312,18 +303,63 @@ index 0595fc7..ed5f8ab 100644
 +          autoArchiveDuration: 60,
 +          reason: 'cc-discord progress streaming',
 +        })
-+        writeFileSync(ptFile, thread.id, { encoding: 'utf8', mode: 0o600 })
++        newTarget = thread.id
 +      } catch (err) {
 +        process.stderr.write(`discord channel: failed to create progress thread: ${err}\n`)
-+        try { writeFileSync(ptFile, chat_id, { encoding: 'utf8', mode: 0o600 }) } catch { /* 完全失敗時は次の inbound で再試行される */ }
++        // newTarget = chat_id のフォールバックのまま
 +      }
-+    } else {
-+      try { writeFileSync(ptFile, chat_id, { encoding: 'utf8', mode: 0o600 }) } catch { /* 同上 */ }
 +    }
++
++    // owner-level の ptFile 排他ロックを取得する (cc-discord パッチ F)
++    // 並行 inbound (同一プロセス内で複数 handleInbound が await を跨いで走るケース) で
++    // 両方が同じ prev を読み 後者の writeFileSync が前者を観測されないまま上書きすると
++    // 観測されなかった前者の thread ID が滞留する問題への対処 (Codex P2 4 巡目指摘 2026-06-22)
++    // ロック中の処理は readFileSync + writeFileSync の同期 I/O だけにし
++    // スレッド作成等の await はロック外で済ませることで critical section を ms 単位に保つ
++    // stale ロック (プロセス死等で 30 秒以上残ったもの) は次の取得試行で掃除する
++    const writeLockFile = join(ptDir, `${OWNER_NAME}.write-lock`)
++    let writeLockHeld = false
++    for (let i = 0; i < 30; i++) {
++      try {
++        writeFileSync(writeLockFile, String(process.pid), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
++        writeLockHeld = true
++        break
++      } catch (err) {
++        if ((err as { code?: string }).code !== 'EEXIST') break
++        try {
++          if (Date.now() - statSync(writeLockFile).mtimeMs > 30_000) {
++            rmSync(writeLockFile, { force: true })
++            continue
++          }
++        } catch { /* 競合は無害 */ }
++        await new Promise(r => setTimeout(r, 100))
++      }
++    }
++    // ロック取得失敗時は ロック無しで続行する 滞留リスクは残るが処理は止めない
++
++    // 同期 critical section: prev capture + ptFile 上書き
++    let prev = ''
++    try { prev = readFileSync(ptFile, 'utf8').trim() } catch { /* 無ければ '' */ }
++    try {
++      writeFileSync(ptFile, newTarget, { encoding: 'utf8', mode: 0o600 })
++    } catch (err) {
++      process.stderr.write(`discord channel: failed to write progress-thread: ${err}\n`)
++    }
++
++    if (writeLockHeld) {
++      try { rmSync(writeLockFile, { force: true }) } catch { /* 解放失敗は次の stale 掃除で回収される */ }
++    }
++
++    // 古い prev を archive (cc-discord パッチ F)
++    // ptFile 上書き後に行うため watch.ts は新宛先を読むようになり 古い prev への POST が止まる
++    // (archive → 上書きの順だと archive 中に watch が古い prev へ POST し続けて Discord の
++    // 自動 unarchive が発火する Codex P2 4 巡目指摘 2026-06-22)
++    // prev が次の宛先 (chat_id) や新スレッド ID (newTarget) と同じ場合はスレッド再利用なのでスキップする
++    if (prev && prev !== chat_id && prev !== newTarget) void archiveProgressThread(prev)
    }
  
    // Ack reaction — lets the user know we're processing. Fire-and-forget.
-@@ -890,8 +1132,60 @@ async function handleInbound(msg: Message): Promise<void> {
+@@ -890,8 +1168,60 @@ async function handleInbound(msg: Message): Promise<void> {
    })
  }
  

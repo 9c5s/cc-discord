@@ -1,5 +1,5 @@
 diff --git a/server.ts b/server.ts
-index 0595fc7..ee0606b 100644
+index 0595fc7..9ba264f 100644
 --- a/server.ts
 +++ b/server.ts
 @@ -63,6 +63,35 @@ if (!TOKEN) {
@@ -187,7 +187,7 @@ index 0595fc7..ee0606b 100644
 +// scanner/handleInbound の write race を実質的に避ける
 +// 誤対象を防ぐため owner_id == bot + 名前パターン + autoArchiveDuration == 60 の AND で絞る
 +const PROGRESS_THREAD_STALE_MS = 12 * 60 * 60 * 1000
-+const PROGRESS_THREAD_NAME_RE = /^\[\d{2}\/\d{2} \d{2}:\d{2}\] /
++const PROGRESS_THREAD_NAME_RE = /^\[\d{2}\/\d{2} \d{2}:\d{2}\]/
 +const DISCORD_EPOCH_MS = 1420070400000n
 +
 +function snowflakeMs(id: string): number {

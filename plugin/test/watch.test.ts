@@ -13,7 +13,7 @@ test('text ブロックから本文を抽出する', () => {
 
 test('tool_use ブロックを toolSummary で文字列化する', () => {
   const line = '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"x","name":"Bash","input":{"command":"ls"}}]}}'
-  expect(extractMessages(line)).toEqual(['```\n⚙️[Bash]\nls\n```'])
+  expect(extractMessages(line)).toEqual(['```bash\n⚙️[Bash]\nls\n```'])
 })
 
 test('file_path 引数を持つ tool_use はファイル名のみ示す', () => {

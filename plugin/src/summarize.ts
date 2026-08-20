@@ -12,9 +12,10 @@ const DETAIL_LIMIT = 200
 // 絵文字を含む全体を 1行かつバッククォート無しならインラインコード それ以外はコードブロックで囲む
 // 本文に ` があるとインラインコードの囲みが壊れるためブロックに逃がし
 // ブロック内で終端と衝突する ``` の連なりは ZWSP を挟んで分断する
-function code(body: string): string {
+// lang を渡すとコードブロックの開始 ``` 直後に置きシンタックスハイライトさせる (インラインでは無視する)
+function code(body: string, lang = ''): string {
   if (!body.includes('\n') && !body.includes('`')) return `\`${body}\``
-  return `\`\`\`\n${body.replaceAll('```', `\`${ZWSP}\`${ZWSP}\``)}\n\`\`\``
+  return `\`\`\`${lang}\n${body.replaceAll('```', `\`${ZWSP}\`${ZWSP}\``)}\n\`\`\``
 }
 
 // バックスラッシュ区切りにも対応してパスからファイル名を取り出す
@@ -56,6 +57,10 @@ const DETAIL_KEYS = [
 // discord:reply は text がそのまま返信として届くため 通知はツール名のみにする
 const HIDE_BODY_TOOLS = new Set(['discord:reply'])
 
+// command を持つシェル系ツール (短縮名) とそのコードブロックに付ける言語指定
+// Discord は ``` 直後の言語名でシンタックスハイライトする (モバイルは無効)
+const COMMAND_LANGS = new Map([['Bash', 'bash'], ['PowerShell', 'powershell']])
+
 // limit コードポイントを超える文字列は切り捨てて ... を付ける
 // サロゲートペアを分断しないよう code point 単位で数える
 export function truncate(s: string, limit: number): string {
@@ -93,6 +98,7 @@ function pickDetail(input: Record<string, unknown>): { key: string; value: strin
 // どのキーも `⚙️[ツール名] 補足` の空白区切り1行 (`⚙️[Edit] watch.ts` / `⚙️[Agent] ログ調査`) とするが
 // command と改行/バッククォート入りや上限超の本文はツール名の後で改行しコードブロックにする
 // 本文の上限は command が 1800 字 その他は 200 字で 超過分は切り捨てて ... を付ける
+// COMMAND_LANGS にあるツールの command ブロックは言語指定を付けてシンタックスハイライトさせる
 // hideBody が true または HIDE_BODY_TOOLS のツールは本文を出さずツール名のみにする
 // ZWSP 展開による超過を防ぐため最終ブロックが 1900 コードポイントを超える場合は本文を短縮する
 export function toolSummary(name: string, input: Record<string, unknown>, hideBody = false): string {
@@ -106,13 +112,14 @@ export function toolSummary(name: string, input: Record<string, unknown>, hideBo
   let body = truncate(detail.value, detail.key === 'command' ? COMMAND_LIMIT : DETAIL_LIMIT)
   if (detail.key === 'command' || body !== detail.value || body.includes('\n') || body.includes('`')) {
     const header = `⚙️[${n}]\n`
-    let block = code(`${header}${body}`)
+    const lang = detail.key === 'command' ? COMMAND_LANGS.get(n) ?? '' : ''
+    let block = code(`${header}${body}`, lang)
     let bodyPoints = [...body]
     // ZWSP 展開で 1900 を超える場合は本文を短縮するループ
     while (bodyPoints.length > 0 && [...block].length > 1900) {
       bodyPoints = bodyPoints.slice(0, -1)
       body = bodyPoints.length > 0 ? bodyPoints.join('') + '…' : ''
-      block = code(`${header}${body}`)
+      block = code(`${header}${body}`, lang)
     }
     return block
   }

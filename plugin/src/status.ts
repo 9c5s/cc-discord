@@ -59,13 +59,13 @@ export function readModelUsageSuffix(path = usageCachePath()): string {
   return top < 0 ? '' : `(${Math.round(top)}%)`
 }
 
-// rate_limits の1バケット (five_hour/seven_day) を "⏰ 63% 19:10" 形式にする
-// アイコンが 5h/7d のラベルを兼ねる
+// rate_limits の1バケット (five_hour/seven_day) を "5h 63% 19:10" 形式にする
+// label には期間を表す 5h / 7d を渡す
 // suffix は利用率の直後へ付ける内訳表記で 週次のモデル別枠にのみ使う
 function rateSeg(
   rl: J | null,
   key: string,
-  icon: string,
+  label: string,
   fmt: (ts: number) => string,
   suffix = '',
 ): string | null {
@@ -74,16 +74,15 @@ function rateSeg(
   const pct = num(b.used_percentage)
   if (pct === null) return null
   const ts = num(b.resets_at)
-  const head = `${icon} ${Math.round(pct)}%${suffix}`
+  const head = `${label} ${Math.round(pct)}%${suffix}`
   return ts === null ? head : `${head} ${fmt(ts)}`
 }
 
 // ステータスブロック本体
 // 3行構成で 取得できない要素は行ごと/要素ごとに省く
-// 各項目はテキストラベルの代わりに絵文字を頭に付ける (コードブロック内で安定表示する世代を選定済み)
-// 1行目: 🌿 ブランチ名
-// 2行目: 👾 モデル名 | 🧠 <effort level>
-// 3行目: 📊 <ctx使用率>% | ⏰ <5h使用率>% <リセット> | 📅 <7d使用率>%(<モデル別枠>) <リセット>
+// 1行目: ブランチ名
+// 2行目: モデル名 <effort level>
+// 3行目: <ctx使用率>% | 5h <5h使用率>% <リセット> | 7d <7d使用率>%(<モデル別枠>) <リセット>
 // 全行が欠けるときは空文字を返し 呼び出し側が付与をスキップできるようにする
 export function buildStatusBlock(
   data: J,
@@ -91,7 +90,7 @@ export function buildStatusBlock(
   modelUsage = '',
 ): string {
   const lines: string[] = []
-  if (branch) lines.push(`🌿 ${branch}`)
+  if (branch) lines.push(branch)
 
   // display_name 末尾の "(NM context)" は冗長なので "(NM)" に短縮する
   // 画面の statusline 側も同じ短縮を入れている (画面表示との一貫性)
@@ -99,16 +98,16 @@ export function buildStatusBlock(
   // 通常モデル ("Opus 4.7" 等) は match しないためそのまま残る
   const model = str(obj(data.model)?.display_name)?.replace(/ context\)$/, ')') ?? null
   const effort = str(obj(data.effort)?.level)
-  if (model) lines.push(effort ? `👾 ${model} | 🧠 ${effort}` : `👾 ${model}`)
+  if (model) lines.push(effort ? `${model} ${effort}` : model)
 
   const parts: string[] = []
   const ctx = num(obj(data.context_window)?.used_percentage)
-  if (ctx !== null) parts.push(`📊 ${Math.round(ctx)}%`)
+  if (ctx !== null) parts.push(`${Math.round(ctx)}%`)
   const rl = obj(data.rate_limits)
-  const r5 = rateSeg(rl, 'five_hour', '⏰', resetTime)
+  const r5 = rateSeg(rl, 'five_hour', '5h', resetTime)
   if (r5) parts.push(r5)
   // モデル別の枠は週次にのみ存在するため 7d だけ内訳を併記する
-  const r7 = rateSeg(rl, 'seven_day', '📅', resetDate, modelUsage)
+  const r7 = rateSeg(rl, 'seven_day', '7d', resetDate, modelUsage)
   if (r7) parts.push(r7)
   if (parts.length > 0) lines.push(parts.join(' | '))
 

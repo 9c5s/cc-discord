@@ -23,25 +23,25 @@ const fullData = {
 
 test('buildStatusBlock は branch/model+effort/ctx+5h+7d の3行コードブロックを作る', () => {
   expect(buildStatusBlock(fullData, 'feat/channel-enhancements')).toBe(
-    '```\nfeat/channel-enhancements\nFable 5 max\n14% | 5h 63% 10:10 | 7d 16% 6/14 3:00\n```',
+    '```\n🌿 feat/channel-enhancements\n👾 Fable 5 | 🧠 max\n📊 14%\n⏰ 63% 10:10\n📅 16% 6/14 3:00\n```',
   )
 })
 
 test('buildStatusBlock は effort が無ければモデル名のみにする', () => {
   const d = { ...fullData, effort: undefined }
   expect(buildStatusBlock(d, null)).toBe(
-    '```\nFable 5\n14% | 5h 63% 10:10 | 7d 16% 6/14 3:00\n```',
+    '```\n👾 Fable 5\n📊 14%\n⏰ 63% 10:10\n📅 16% 6/14 3:00\n```',
   )
 })
 
 test('buildStatusBlock は rate_limits が無ければ ctx のみにする', () => {
   const d = { model: { display_name: 'Fable 5' }, context_window: { used_percentage: 7 } }
-  expect(buildStatusBlock(d, 'main')).toBe('```\nmain\nFable 5\n7%\n```')
+  expect(buildStatusBlock(d, 'main')).toBe('```\n🌿 main\n👾 Fable 5\n📊 7%\n```')
 })
 
 test('buildStatusBlock は resets_at が無ければリセット時刻を省く', () => {
   const d = { rate_limits: { five_hour: { used_percentage: 50 } } }
-  expect(buildStatusBlock(d, null)).toBe('```\n5h 50%\n```')
+  expect(buildStatusBlock(d, null)).toBe('```\n⏰ 50%\n```')
 })
 
 test('buildStatusBlock は要素が全て欠けるとき空文字を返す', () => {
@@ -50,17 +50,17 @@ test('buildStatusBlock は要素が全て欠けるとき空文字を返す', () 
 
 test('buildStatusBlock はモデル名末尾の " context)" を ")" に短縮する', () => {
   const d = { model: { display_name: 'Opus 4.7 (1M context)' } }
-  expect(buildStatusBlock(d, null)).toBe('```\nOpus 4.7 (1M)\n```')
+  expect(buildStatusBlock(d, null)).toBe('```\n👾 Opus 4.7 (1M)\n```')
 })
 
 test('buildStatusBlock は通常モデルの display_name はそのまま使う', () => {
   const d = { model: { display_name: 'Opus 4.7' } }
-  expect(buildStatusBlock(d, null)).toBe('```\nOpus 4.7\n```')
+  expect(buildStatusBlock(d, null)).toBe('```\n👾 Opus 4.7\n```')
 })
 
 test('buildStatusBlock は末尾でない " context)" は置換しない (誤置換防止)', () => {
   const d = { model: { display_name: 'Has (1M context) trailing text' } }
-  expect(buildStatusBlock(d, null)).toBe('```\nHas (1M context) trailing text\n```')
+  expect(buildStatusBlock(d, null)).toBe('```\n👾 Has (1M context) trailing text\n```')
 })
 
 test('readBranch は ref 形式の HEAD からブランチ名を読む', () => {
@@ -103,19 +103,19 @@ test('readBranch は .git が無ければ null を返す', () => {
 
 test('buildStatusBlock は 7d の利用率直後にモデル別枠を併記する', () => {
   expect(buildStatusBlock(fullData, null, '(88%)')).toBe(
-    '```\nFable 5 max\n14% | 5h 63% 10:10 | 7d 16%(88%) 6/14 3:00\n```',
+    '```\n👾 Fable 5 | 🧠 max\n📊 14%\n⏰ 63% 10:10\n📅 16%(88%) 6/14 3:00\n```',
   )
 })
 
 test('buildStatusBlock はモデル別枠が空なら括弧を出さない', () => {
   expect(buildStatusBlock(fullData, null)).toBe(
-    '```\nFable 5 max\n14% | 5h 63% 10:10 | 7d 16% 6/14 3:00\n```',
+    '```\n👾 Fable 5 | 🧠 max\n📊 14%\n⏰ 63% 10:10\n📅 16% 6/14 3:00\n```',
   )
 })
 
 test('buildStatusBlock は 5h には併記しない', () => {
   const d = { rate_limits: { five_hour: { used_percentage: 50 } } }
-  expect(buildStatusBlock(d, null, '(88%)')).toBe('```\n5h 50%\n```')
+  expect(buildStatusBlock(d, null, '(88%)')).toBe('```\n⏰ 50%\n```')
 })
 
 test('readModelUsageSuffix はモデル別枠の最大値を括弧表記で返す', () => {

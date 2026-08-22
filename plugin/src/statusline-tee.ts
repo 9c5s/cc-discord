@@ -10,7 +10,7 @@ import { mkdirSync, writeFileSync, renameSync } from 'fs'
 import { join } from 'path'
 import { stateDir } from './routes'
 import { ownerFromDir } from './normalize'
-import { buildStatusBlock, readBranch } from './status'
+import { buildStatusBlock, readBranch, readModelUsageSuffix } from './status'
 
 const raw = await new Response(Bun.stdin.stream()).text()
 
@@ -42,7 +42,10 @@ try {
     const dir = join(stateDir(), 'statusline')
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     writeAtomic(join(dir, `${owner}.json`), raw)
-    writeAtomic(join(dir, `${owner}.txt`), buildStatusBlock(data, readBranch(pd)))
+    writeAtomic(
+      join(dir, `${owner}.txt`),
+      buildStatusBlock(data, readBranch(pd), readModelUsageSuffix()),
+    )
   }
 } catch (err) {
   // 保存失敗は無視して表示を優先するが DEBUG 設定時は診断を出す

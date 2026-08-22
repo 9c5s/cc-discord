@@ -79,13 +79,12 @@ function rateSeg(
 }
 
 // ステータスブロック本体
-// 最大5行で 取得できない要素は行ごとに省く
+// 最大4行で 取得できない要素は行ごと/要素ごとに省く
 // 各項目はテキストラベルの代わりに絵文字を頭に付ける (コードブロック内で安定表示する世代を選定済み)
 // 1行目: 🌿 ブランチ名
 // 2行目: 👾 モデル名 | 🧠 <effort level>
-// 3行目: 📊 <ctx使用率>%
-// 4行目: ⏰ <5h使用率>% <リセット>
-// 5行目: 📅 <7d使用率>%(<モデル別枠>) <リセット>
+// 3行目: 📊 <ctx使用率>% | ⏰ <5h使用率>% <リセット>
+// 4行目: 📅 <7d使用率>%(<モデル別枠>) <リセット>
 // 全行が欠けるときは空文字を返し 呼び出し側が付与をスキップできるようにする
 export function buildStatusBlock(
   data: J,
@@ -103,12 +102,14 @@ export function buildStatusBlock(
   const effort = str(obj(data.effort)?.level)
   if (model) lines.push(effort ? `👾 ${model} | 🧠 ${effort}` : `👾 ${model}`)
 
-  // 使用率は横に並べず1項目1行にする (幅の狭い端末でも折り返さないため)
+  // ctx と 5h は同じ行にまとめ 週次は内訳を併記する分だけ行を分ける
+  const parts: string[] = []
   const ctx = num(obj(data.context_window)?.used_percentage)
-  if (ctx !== null) lines.push(`📊 ${Math.round(ctx)}%`)
+  if (ctx !== null) parts.push(`📊 ${Math.round(ctx)}%`)
   const rl = obj(data.rate_limits)
   const r5 = rateSeg(rl, 'five_hour', '⏰', resetTime)
-  if (r5) lines.push(r5)
+  if (r5) parts.push(r5)
+  if (parts.length > 0) lines.push(parts.join(' | '))
   // モデル別の枠は週次にのみ存在するため 7d だけ内訳を併記する
   const r7 = rateSeg(rl, 'seven_day', '📅', resetDate, modelUsage)
   if (r7) lines.push(r7)

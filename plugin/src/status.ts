@@ -48,7 +48,7 @@ function resetDate(ts: number): string {
 }
 
 // モデル別週次枠のキャッシュから 7d へ併記する表記を作る
-// この経路では HTTP を発行せず読むだけに留める (更新は usage.ts の ensureFresh が別プロセスへ逃がす)
+// この経路では HTTP を発行せず読むだけに留める (取得と更新は usage.ts が別プロセスで担う)
 // 複数のモデル枠がある場合は上限に最も近いものを採用する
 // 読めない場合は空文字を返し括弧自体を出さない
 export function readModelUsageSuffix(path = usageCachePath()): string {

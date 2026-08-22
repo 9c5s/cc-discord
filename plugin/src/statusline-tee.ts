@@ -11,6 +11,7 @@ import { join } from 'path'
 import { stateDir } from './routes'
 import { ownerFromDir } from './normalize'
 import { buildStatusBlock, readBranch, readModelUsageSuffix } from './status'
+import { ensureFresh } from './usage'
 
 const raw = await new Response(Bun.stdin.stream()).text()
 
@@ -42,6 +43,8 @@ try {
     const dir = join(stateDir(), 'statusline')
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     writeAtomic(join(dir, `${owner}.json`), raw)
+    // モデル別枠のキャッシュが古ければ更新を別プロセスへ依頼する (結果は次回に反映する)
+    ensureFresh()
     writeAtomic(
       join(dir, `${owner}.txt`),
       buildStatusBlock(data, readBranch(pd), readModelUsageSuffix()),

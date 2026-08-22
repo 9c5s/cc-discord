@@ -1,11 +1,20 @@
 import { spawn } from 'child_process'
-import { closeSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs'
-import { homedir, tmpdir } from 'os'
-import { join } from 'path'
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'fs'
+import { homedir } from 'os'
+import { dirname, join } from 'path'
+import { stateDir } from './routes'
 
 // モデル別週次枠 (Fable 等) の取得とキャッシュを担うモジュール
 // statusline の stdin JSON にはモデル別の枠が含まれないため使用量 API から直接取る
-// キャッシュ形式とパスは statusline と共有しており どちらが更新しても互いに読める
+// キャッシュは cc-discord 専用で statusline 側とは一切共有しない (相互に依存させない)
 // 表示側 (status.ts) は読むだけで HTTP を発行せず 更新は常に別プロセスへ逃がす
 
 type J = Record<string, unknown>
@@ -20,10 +29,10 @@ export type ModelUsageEntry = {
 
 const API_URL = 'https://api.anthropic.com/api/oauth/usage'
 const API_TIMEOUT_MS = 5_000
-const TTL_SEC = 300 // statusline 側の TTL と揃える
+const TTL_SEC = 300 // キャッシュの保持時間
 const RETRY_SEC = 60 // 取得失敗時に再試行を抑制する間隔
 
-export const usageCachePath = (): string => join(tmpdir(), 'claude-model-usage.json')
+export const usageCachePath = (): string => join(stateDir(), 'model-usage.json')
 const credentialsPath = (): string => join(homedir(), '.claude', '.credentials.json')
 
 const nowSec = (): number => Date.now() / 1000
@@ -39,12 +48,13 @@ function readCache(path: string): J {
 
 // 同時読み取りに壊れたファイルを見せないため一時ファイル経由で置き換える
 function writeAtomic(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const tmp = `${path}.${process.pid}.tmp`
   writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 })
   renameSync(tmp, path)
 }
 
-// statusline と同じ `<path>.lock` 方式で read-modify-write を直列化する
+// `<path>.lock` を使って read-modify-write を直列化する
 // 取得できない場合も処理は続行する (可用性を優先し stale lock でも停止しない)
 function withLock<T>(path: string, fn: () => T): T {
   const lockPath = `${path}.lock`
@@ -172,7 +182,7 @@ function spawnRefresh(): void {
 
 // キャッシュが古ければ更新を別プロセスへ依頼する
 // 結果は待たず次回の描画へ反映する (statusline の表示を遅延させないため)
-// 起動前に試行時刻を記録し statusline 側との二重取得を防ぐ
+// 起動前に試行時刻を記録し 同時に走る tee プロセス間での二重取得を防ぐ
 export function ensureFresh(path = usageCachePath(), spawnFn = spawnRefresh): void {
   const cache = readCache(path)
   const now = nowSec()

@@ -165,7 +165,7 @@ footer は末尾チャンクに収まるなら結合、収まらなければ独�
 
 - **settings.json 側の前提**: `statusLine.command` が tee でラップされていること。
   例 (`<repo>` は本リポジトリの clone 先。statusline スクリプト部分は自身の設定に置き換える):
-  `bun <repo>/plugin/src/statusline-tee.ts uv run ~/.claude/scripts/statusline --icons=nerd`
+  `bun <repo>/plugin/src/statusline-tee.ts <本来の statusline コマンド>`
   tee を外すと .txt が更新されなくなり、10分で footer は自然消滅する。
 - **owner 単位の last-writer-wins**: 同一プロジェクトでセッションが並走すると最後に statusline を
   描画したセッションの値になる。reply する瞬間は自セッションがアクティブなため実用上は一致する。

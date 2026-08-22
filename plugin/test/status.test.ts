@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { buildStatusBlock, readBranch } from '../src/status'
+import { buildStatusBlock, readBranch, readModelUsageSuffix } from '../src/status'
 
 // 注: bun test はタイムゾーンを UTC に固定するため リセット時刻の期待値は UTC 表記である
 // 1781086200 = 2026-06-10 10: 10 UTC, 1781406000 = 2026-06-14 03: 00 UTC
@@ -97,4 +97,67 @@ test('readBranch は相対パス gitdir 参照を projectDir 基準で解決す�
 test('readBranch は .git が無ければ null を返す', () => {
   const dir = mkdtempSync(join(tmpdir(), 'status-test-'))
   expect(readBranch(dir)).toBeNull()
+})
+
+// モデル別週次枠 (usage.ts が更新するキャッシュ由来) の併記
+
+test('buildStatusBlock は 7d の利用率直後にモデル別枠を併記する', () => {
+  expect(buildStatusBlock(fullData, null, '(88%)')).toBe(
+    '```\n👾 Fable 5 | 🧠 max\n📊 14% | ⏰ 63% 10:10 | 📅 16%(88%) 6/14 3:00\n```',
+  )
+})
+
+test('buildStatusBlock はモデル別枠が空なら括弧を出さない', () => {
+  expect(buildStatusBlock(fullData, null)).toBe(
+    '```\n👾 Fable 5 | 🧠 max\n📊 14% | ⏰ 63% 10:10 | 📅 16% 6/14 3:00\n```',
+  )
+})
+
+test('buildStatusBlock は 5h には併記しない', () => {
+  const d = { rate_limits: { five_hour: { used_percentage: 50 } } }
+  expect(buildStatusBlock(d, null, '(88%)')).toBe('```\n⏰ 50%\n```')
+})
+
+test('readModelUsageSuffix はモデル別枠の最大値を括弧表記で返す', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'usage-'))
+  const p = join(dir, 'usage.json')
+  writeFileSync(
+    p,
+    JSON.stringify({
+      data: [
+        { display_name: 'Sonnet', percent: 10 },
+        { display_name: 'Fable', percent: 88 },
+      ],
+    }),
+  )
+  expect(readModelUsageSuffix(p)).toBe('(88%)')
+})
+
+test('readModelUsageSuffix はキャッシュが無ければ空文字を返す', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'usage-'))
+  expect(readModelUsageSuffix(join(dir, 'absent.json'))).toBe('')
+})
+
+test('readModelUsageSuffix は data が空配列なら空文字を返す', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'usage-'))
+  const p = join(dir, 'empty.json')
+  writeFileSync(p, JSON.stringify({ data: [] }))
+  expect(readModelUsageSuffix(p)).toBe('')
+})
+
+test('readModelUsageSuffix は壊れた JSON でも空文字を返す', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'usage-'))
+  const p = join(dir, 'broken.json')
+  writeFileSync(p, '{invalid')
+  expect(readModelUsageSuffix(p)).toBe('')
+})
+
+test('readModelUsageSuffix は percent が数値でない要素を無視する', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'usage-'))
+  const p = join(dir, 'mixed.json')
+  writeFileSync(
+    p,
+    JSON.stringify({ data: [{ display_name: 'Fable', percent: null }] }),
+  )
+  expect(readModelUsageSuffix(p)).toBe('')
 })

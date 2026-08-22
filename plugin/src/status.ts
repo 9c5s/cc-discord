@@ -1,4 +1,5 @@
 import { readFileSync } from 'fs'
+import { tmpdir } from 'os'
 import { join, resolve } from 'path'
 
 // statusline JSON からリプライ末尾に付ける3行ステータスブロックを構築するモジュール
@@ -46,15 +47,44 @@ function resetDate(ts: number): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${resetTime(ts)}`
 }
 
+// statusline が更新するモデル別週次枠のキャッシュから 7d へ併記する表記を作る
+// 取得と更新は statusline の責務でありここでは読むだけに留める
+// 複数のモデル枠がある場合は上限に最も近いものを採用する
+// 読めない場合は空文字を返し括弧自体を出さない
+export function readModelUsageSuffix(
+  path = join(tmpdir(), 'claude-model-usage.json'),
+): string {
+  try {
+    const data = obj(JSON.parse(readFileSync(path, 'utf8')))?.data
+    if (!Array.isArray(data)) return ''
+    let top = -1
+    for (const e of data) {
+      const p = num(obj(e)?.percent)
+      if (p !== null && p > top) top = p
+    }
+    return top < 0 ? '' : `(${Math.round(top)}%)`
+  } catch {
+    return ''
+  }
+}
+
 // rate_limits の1バケット (five_hour/seven_day) を "⏰ 63% 19:10" 形式にする
 // アイコンが 5h/7d のラベルを兼ねる
-function rateSeg(rl: J | null, key: string, icon: string, fmt: (ts: number) => string): string | null {
+// suffix は利用率の直後へ付ける内訳表記で 週次のモデル別枠にのみ使う
+function rateSeg(
+  rl: J | null,
+  key: string,
+  icon: string,
+  fmt: (ts: number) => string,
+  suffix = '',
+): string | null {
   const b = obj(rl?.[key])
   if (!b) return null
   const pct = num(b.used_percentage)
   if (pct === null) return null
   const ts = num(b.resets_at)
-  return ts === null ? `${icon} ${Math.round(pct)}%` : `${icon} ${Math.round(pct)}% ${fmt(ts)}`
+  const head = `${icon} ${Math.round(pct)}%${suffix}`
+  return ts === null ? head : `${head} ${fmt(ts)}`
 }
 
 // ステータスブロック本体
@@ -62,9 +92,13 @@ function rateSeg(rl: J | null, key: string, icon: string, fmt: (ts: number) => s
 // 各項目はテキストラベルの代わりに絵文字を頭に付ける (コードブロック内で安定表示する世代を選定済み)
 // 1行目: 🌿 ブランチ名
 // 2行目: 👾 モデル名 | 🧠 <effort level>
-// 3行目: 📊 <ctx使用率>% | ⏰ <5h使用率>% <リセット> | 📅 <7d使用率>% <リセット>
+// 3行目: 📊 <ctx使用率>% | ⏰ <5h使用率>% <リセット> | 📅 <7d使用率>%(<モデル別枠>) <リセット>
 // 全行が欠けるときは空文字を返し 呼び出し側が付与をスキップできるようにする
-export function buildStatusBlock(data: J, branch: string | null): string {
+export function buildStatusBlock(
+  data: J,
+  branch: string | null,
+  modelUsage = '',
+): string {
   const lines: string[] = []
   if (branch) lines.push(`🌿 ${branch}`)
 
@@ -82,7 +116,8 @@ export function buildStatusBlock(data: J, branch: string | null): string {
   const rl = obj(data.rate_limits)
   const r5 = rateSeg(rl, 'five_hour', '⏰', resetTime)
   if (r5) parts.push(r5)
-  const r7 = rateSeg(rl, 'seven_day', '📅', resetDate)
+  // モデル別の枠は週次にのみ存在するため 7d だけ内訳を併記する
+  const r7 = rateSeg(rl, 'seven_day', '📅', resetDate, modelUsage)
   if (r7) parts.push(r7)
   if (parts.length > 0) lines.push(parts.join(' | '))
 

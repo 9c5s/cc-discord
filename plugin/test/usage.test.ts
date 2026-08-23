@@ -4,10 +4,12 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   ensureFresh,
-  fetchModelUsage,
+  fetchUsageSnapshot,
   readAccessToken,
+  readCachedWeekly,
   readModelUsage,
   refreshModelUsage,
+  withCachedWeekly,
   type ModelUsageEntry,
 } from '../src/usage'
 
@@ -77,9 +79,45 @@ test('readAccessToken は claudeAiOauth が無ければ null を返す', () => {
   expect(readAccessToken(p)).toBeNull()
 })
 
-// --- fetchModelUsage ---
+// --- fetchUsageSnapshot ---
 
-test('fetchModelUsage は weekly_scoped のモデル別枠だけを射影する', async () => {
+// スナップショットからモデル別枠だけを取り出す
+const fetchEntries = async (token: string | null): Promise<ModelUsageEntry[] | null> => {
+  const snap = await fetchUsageSnapshot(token)
+  return snap === null ? null : snap.modelScoped
+}
+
+const WEEKLY_ALL = {
+  kind: 'weekly_all',
+  group: 'weekly',
+  percent: 51,
+  resets_at: '2026-08-23T02:59:59+00:00',
+  scope: null,
+}
+
+test('fetchUsageSnapshot は weekly_all を 7d 全体として取り出す', async () => {
+  const body = { limits: [WEEKLY_ALL, WEEKLY_SCOPED] }
+  const snap = await withFetch(jsonResponse(body), () => fetchUsageSnapshot('tok'))
+  expect(snap?.weekly).toEqual({
+    used_percentage: 51,
+    resets_at: Date.parse('2026-08-23T02:59:59+00:00') / 1000,
+  })
+  expect(snap?.modelScoped).toHaveLength(1)
+})
+
+test('fetchUsageSnapshot は weekly_all が無ければ 7d 全体を null にする', async () => {
+  const body = { limits: [WEEKLY_SCOPED] }
+  const snap = await withFetch(jsonResponse(body), () => fetchUsageSnapshot('tok'))
+  expect(snap?.weekly).toBeNull()
+})
+
+test('fetchUsageSnapshot はリセット時刻の無い weekly_all を採用しない', async () => {
+  const body = { limits: [{ ...WEEKLY_ALL, resets_at: null }] }
+  const snap = await withFetch(jsonResponse(body), () => fetchUsageSnapshot('tok'))
+  expect(snap?.weekly).toBeNull()
+})
+
+test('fetchUsageSnapshot は weekly_scoped のモデル別枠だけを射影する', async () => {
   const body = {
     limits: [
       { kind: 'session', percent: 28, resets_at: null, scope: null },
@@ -87,7 +125,7 @@ test('fetchModelUsage は weekly_scoped のモデル別枠だけを射影する'
       WEEKLY_SCOPED,
     ],
   }
-  const got = await withFetch(jsonResponse(body), () => fetchModelUsage('tok'))
+  const got = await withFetch(jsonResponse(body), () => fetchEntries('tok'))
   expect(got).toEqual([
     {
       display_name: 'Fable',
@@ -97,7 +135,7 @@ test('fetchModelUsage は weekly_scoped のモデル別枠だけを射影する'
   ])
 })
 
-test('fetchModelUsage は scope.model が無い要素を除外する', async () => {
+test('fetchUsageSnapshot は scope.model が無い要素を除外する', async () => {
   const body = {
     limits: [
       {
@@ -108,41 +146,41 @@ test('fetchModelUsage は scope.model が無い要素を除外する', async () 
       },
     ],
   }
-  expect(await withFetch(jsonResponse(body), () => fetchModelUsage('tok'))).toEqual([])
+  expect(await withFetch(jsonResponse(body), () => fetchEntries('tok'))).toEqual([])
 })
 
-test('fetchModelUsage は resets_at が文字列でなければ null にする', async () => {
+test('fetchUsageSnapshot は resets_at が文字列でなければ null にする', async () => {
   const body = { limits: [{ ...WEEKLY_SCOPED, resets_at: null }] }
-  const got = await withFetch(jsonResponse(body), () => fetchModelUsage('tok'))
+  const got = await withFetch(jsonResponse(body), () => fetchEntries('tok'))
   expect(got?.[0].resets_at).toBeNull()
 })
 
-test('fetchModelUsage は limits が無ければ空配列を返す', async () => {
-  expect(await withFetch(jsonResponse({ five_hour: null }), () => fetchModelUsage('tok'))).toEqual(
+test('fetchUsageSnapshot は limits が無ければ空配列を返す', async () => {
+  expect(await withFetch(jsonResponse({ five_hour: null }), () => fetchEntries('tok'))).toEqual(
     [],
   )
 })
 
-test('fetchModelUsage はトークンが無ければ HTTP を発行しない', async () => {
+test('fetchUsageSnapshot はトークンが無ければ HTTP を発行しない', async () => {
   let called = false
   const spy = (async () => {
     called = true
     return new Response('{}')
   }) as unknown as typeof fetch
-  expect(await withFetch(spy, () => fetchModelUsage(null))).toBeNull()
+  expect(await withFetch(spy, () => fetchEntries(null))).toBeNull()
   expect(called).toBe(false)
 })
 
-test('fetchModelUsage は HTTP エラーなら null を返す', async () => {
+test('fetchUsageSnapshot は HTTP エラーなら null を返す', async () => {
   const err = (async () => new Response('nope', { status: 401 })) as unknown as typeof fetch
-  expect(await withFetch(err, () => fetchModelUsage('tok'))).toBeNull()
+  expect(await withFetch(err, () => fetchEntries('tok'))).toBeNull()
 })
 
-test('fetchModelUsage は通信例外でも null を返す', async () => {
+test('fetchUsageSnapshot は通信例外でも null を返す', async () => {
   const boom = (async () => {
     throw new Error('boom')
   }) as unknown as typeof fetch
-  expect(await withFetch(boom, () => fetchModelUsage('tok'))).toBeNull()
+  expect(await withFetch(boom, () => fetchEntries('tok'))).toBeNull()
 })
 
 // --- readModelUsage ---
@@ -165,12 +203,14 @@ test('readModelUsage は percent が数値でない要素を除外する', () =>
 
 // --- refreshModelUsage ---
 
-test('refreshModelUsage は取得結果と時刻を書き込む', async () => {
+test('refreshModelUsage は週次値とモデル別枠と時刻を書き込む', async () => {
   const p = tmpFile('cache.json')
   const entries: ModelUsageEntry[] = [{ display_name: 'Fable', percent: 88, resets_at: null }]
-  await refreshModelUsage(p, async () => entries)
+  const weekly = { used_percentage: 51, resets_at: 1787454000 }
+  await refreshModelUsage(p, async () => ({ weekly, modelScoped: entries }))
   const c = readJson(p)
   expect(c.data).toEqual(entries)
+  expect(c.weekly).toEqual(weekly)
   expect(typeof c._cached_at).toBe('number')
   expect(typeof c._attempted_at).toBe('number')
 })
@@ -178,10 +218,12 @@ test('refreshModelUsage は取得結果と時刻を書き込む', async () => {
 test('refreshModelUsage は失敗時に既存データを保持し試行時刻だけ更新する', async () => {
   const p = tmpFile('cache.json')
   const kept = [{ display_name: 'Fable', percent: 88, resets_at: null }]
-  writeJson(p, { _cached_at: 100, _attempted_at: 100, data: kept })
+  const weekly = { used_percentage: 51, resets_at: 1787454000 }
+  writeJson(p, { _cached_at: 100, _attempted_at: 100, data: kept, weekly })
   await refreshModelUsage(p, async () => null)
   const c = readJson(p)
   expect(c.data).toEqual(kept)
+  expect(c.weekly).toEqual(weekly)
   expect(c._cached_at).toBe(100)
   expect(c._attempted_at as number).toBeGreaterThan(100)
 })
@@ -241,4 +283,56 @@ test('ensureFresh は起動前に試行時刻を記録して二重取得を防�
     spawned = true
   })
   expect(spawned).toBe(false)
+})
+
+// --- 7d 全体の差し替え ---
+
+const WEEKLY_CACHE = { used_percentage: 51, resets_at: 1787454000 }
+const STDIN_DATA = {
+  rate_limits: {
+    five_hour: { used_percentage: 30, resets_at: 1787383200 },
+    seven_day: { used_percentage: 99, resets_at: 1 },
+  },
+}
+
+test('withCachedWeekly はキャッシュの週次値で seven_day を差し替える', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { weekly: WEEKLY_CACHE })
+  const got = withCachedWeekly(STDIN_DATA, p) as Record<string, Record<string, unknown>>
+  expect(got.rate_limits.seven_day).toEqual(WEEKLY_CACHE)
+})
+
+test('withCachedWeekly は 5h を差し替えない', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { weekly: WEEKLY_CACHE })
+  const got = withCachedWeekly(STDIN_DATA, p) as Record<string, Record<string, unknown>>
+  expect(got.rate_limits.five_hour).toEqual(STDIN_DATA.rate_limits.five_hour)
+})
+
+test('withCachedWeekly はキャッシュが無ければ元の data を返す', () => {
+  expect(withCachedWeekly(STDIN_DATA, tmpFile('absent.json'))).toEqual(STDIN_DATA)
+})
+
+test('withCachedWeekly は元の data を書き換えない', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { weekly: WEEKLY_CACHE })
+  withCachedWeekly(STDIN_DATA, p)
+  expect(STDIN_DATA.rate_limits.seven_day.used_percentage).toBe(99)
+})
+
+test('withCachedWeekly は rate_limits が無ければ元の data を返す', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { weekly: WEEKLY_CACHE })
+  const d = { model: { display_name: 'Fable 5' } }
+  expect(withCachedWeekly(d, p)).toEqual(d)
+})
+
+test('readCachedWeekly は値が不正なら null を返す', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { weekly: { used_percentage: null, resets_at: 1 } })
+  expect(readCachedWeekly(p)).toBeNull()
+})
+
+test('readCachedWeekly はキャッシュが無ければ null を返す', () => {
+  expect(readCachedWeekly(tmpFile('absent.json'))).toBeNull()
 })

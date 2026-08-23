@@ -11,7 +11,7 @@ import { join } from 'path'
 import { stateDir } from './routes'
 import { ownerFromDir } from './normalize'
 import { buildStatusBlock, readBranch, readModelUsageSuffix } from './status'
-import { ensureFresh } from './usage'
+import { ensureFresh, withCachedWeekly } from './usage'
 
 const raw = await new Response(Bun.stdin.stream()).text()
 
@@ -47,7 +47,7 @@ try {
     ensureFresh()
     writeAtomic(
       join(dir, `${owner}.txt`),
-      buildStatusBlock(data, readBranch(pd), readModelUsageSuffix()),
+      buildStatusBlock(withCachedWeekly(data), readBranch(pd), readModelUsageSuffix()),
     )
   }
 } catch (err) {

@@ -27,6 +27,19 @@ export type ModelUsageEntry = {
   resets_at: number | null
 }
 
+// 7d 全体のバケット (statusline JSON の rate_limits.seven_day と同じ形)
+export type WeeklyBucket = {
+  used_percentage: number
+  resets_at: number
+}
+
+// 使用量 API から一度に取り出した週次の使用状況
+// 7d 全体とモデル別枠を同じ応答から取ることで表示時点を揃える
+export type UsageSnapshot = {
+  weekly: WeeklyBucket | null
+  modelScoped: ModelUsageEntry[]
+}
+
 const API_URL = 'https://api.anthropic.com/api/oauth/usage'
 const API_TIMEOUT_MS = 5_000
 const TTL_SEC = 300 // キャッシュの保持時間
@@ -114,8 +127,22 @@ function toEntry(item: unknown): ModelUsageEntry | null {
   }
 }
 
-// 使用量 API からモデル別の週次枠を取得する (失敗時は null)
-export async function fetchModelUsage(token = readAccessToken()): Promise<ModelUsageEntry[] | null> {
+// limits 配列の1要素を 7d 全体のバケットへ変換する
+// kind が weekly_all の要素だけを対象とし リセット時刻が無いものは表示できないため除く
+function toWeeklyBucket(item: unknown): WeeklyBucket | null {
+  const o = obj(item)
+  if (!o || o.kind !== 'weekly_all') return null
+  const percent = num(o.percent)
+  const iso = typeof o.resets_at === 'string' ? Date.parse(o.resets_at) : Number.NaN
+  if (percent === null || !Number.isFinite(iso)) return null
+  return { used_percentage: percent, resets_at: iso / 1000 }
+}
+
+// 使用量 API から週次の使用状況を取得する (失敗時は null)
+// 7d 全体も同じ応答から取り出し 括弧内の内訳と表示時点を揃える
+export async function fetchUsageSnapshot(
+  token = readAccessToken(),
+): Promise<UsageSnapshot | null> {
   if (!token) return null
   try {
     const res = await fetch(API_URL, {
@@ -124,8 +151,19 @@ export async function fetchModelUsage(token = readAccessToken()): Promise<ModelU
     })
     if (!res.ok) return null
     const limits = obj(await res.json())?.limits
-    if (!Array.isArray(limits)) return []
-    return limits.map(toEntry).filter((e): e is ModelUsageEntry => e !== null)
+    if (!Array.isArray(limits)) return { weekly: null, modelScoped: [] }
+
+    let weekly: WeeklyBucket | null = null
+    const modelScoped: ModelUsageEntry[] = []
+    for (const item of limits) {
+      const entry = toEntry(item)
+      if (entry !== null) {
+        modelScoped.push(entry)
+      } else if (weekly === null) {
+        weekly = toWeeklyBucket(item)
+      }
+    }
+    return { weekly, modelScoped }
   } catch {
     return null
   }
@@ -152,19 +190,40 @@ function toStoredEntry(item: unknown): ModelUsageEntry | null {
 // 失敗時も試行時刻だけ記録し既存データは保持する
 export async function refreshModelUsage(
   path = usageCachePath(),
-  fetchFn = fetchModelUsage,
+  fetchFn = fetchUsageSnapshot,
 ): Promise<void> {
-  const entries = await fetchFn()
+  const snapshot = await fetchFn()
   const now = nowSec()
   withLock(path, () => {
     const cache = readCache(path)
     cache._attempted_at = now
-    if (entries !== null) {
+    if (snapshot !== null) {
       cache._cached_at = now
-      cache.data = entries
+      cache.data = snapshot.modelScoped
+      cache.weekly = snapshot.weekly
     }
     writeAtomic(path, JSON.stringify(cache))
   })
+}
+
+// キャッシュの 7d 全体を読む (無ければ null)
+export function readCachedWeekly(path = usageCachePath()): WeeklyBucket | null {
+  const w = obj(readCache(path).weekly)
+  if (!w) return null
+  const percent = num(w.used_percentage)
+  const resets = num(w.resets_at)
+  if (percent === null || resets === null) return null
+  return { used_percentage: percent, resets_at: resets }
+}
+
+// rate_limits.seven_day をキャッシュの週次値へ差し替える
+// 括弧内のモデル別枠と同じ取得時点の値を並べるためである
+// キャッシュに週次の値が無ければ元の data をそのまま返す
+export function withCachedWeekly(data: J, path = usageCachePath()): J {
+  const weekly = readCachedWeekly(path)
+  const rl = obj(data.rate_limits)
+  if (weekly === null || rl === null) return data
+  return { ...data, rate_limits: { ...rl, seven_day: weekly } }
 }
 
 // 更新用の子プロセスをデタッチして起動する

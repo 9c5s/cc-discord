@@ -14,26 +14,42 @@ test('toolSummary は pattern をインラインコードにする', () => {
   expect(toolSummary('Grep', { pattern: 'foo.*bar' })).toBe('`⚙️[Grep] foo.*bar`')
 })
 
-test('toolSummary は bash をツール名と本文の間で改行し bash 指定のコードブロックにする', () => {
-  expect(toolSummary('Bash', { command: 'bun test' })).toBe('```bash\n⚙️[Bash]\nbun test\n```')
+test('toolSummary は bash をヘッダー行と bash 指定のコードブロックの2段にする', () => {
+  expect(toolSummary('Bash', { command: 'bun test' })).toBe('`⚙️[Bash]`\n```bash\nbun test\n```')
+})
+
+test('toolSummary は description をヘッダー行に併記する', () => {
+  expect(toolSummary('Bash', { command: 'bun test', description: 'テスト実行' })).toBe('`⚙️[Bash] テスト実行`\n```bash\nbun test\n```')
+})
+
+test('toolSummary は description の改行と連続空白を空白1つに正規化する', () => {
+  expect(toolSummary('Bash', { command: 'ls', description: 'a\n\nb  c' })).toBe('`⚙️[Bash] a b c`\n```bash\nls\n```')
+})
+
+test('toolSummary は200字を超える description を200字で切り捨てる', () => {
+  expect(toolSummary('Bash', { command: 'ls', description: 'あ'.repeat(250) })).toBe('`⚙️[Bash] ' + 'あ'.repeat(200) + '…`\n```bash\nls\n```')
+})
+
+test('toolSummary は空白のみの description をヘッダーに出さない', () => {
+  expect(toolSummary('Bash', { command: 'ls', description: '  ' })).toBe('`⚙️[Bash]`\n```bash\nls\n```')
 })
 
 test('toolSummary は PowerShell の command を powershell 指定のコードブロックにする', () => {
-  expect(toolSummary('PowerShell', { command: 'Get-ChildItem' })).toBe('```powershell\n⚙️[PowerShell]\nGet-ChildItem\n```')
+  expect(toolSummary('PowerShell', { command: 'Get-ChildItem', description: '一覧取得' })).toBe('`⚙️[PowerShell] 一覧取得`\n```powershell\nGet-ChildItem\n```')
 })
 
 test('toolSummary は Bash と PowerShell 以外の command には言語指定を付けない', () => {
-  expect(toolSummary('mcp__codex__exec', { command: 'ls' })).toBe('```\n⚙️[codex:exec]\nls\n```')
+  expect(toolSummary('mcp__codex__exec', { command: 'ls' })).toBe('`⚙️[codex:exec]`\n```\nls\n```')
 })
 
 test('toolSummary は1800字を超える bash を1800字で切り捨て…を付ける', () => {
   const long = 'echo ' + 'x'.repeat(2000)
-  expect(toolSummary('Bash', { command: long })).toBe('```bash\n⚙️[Bash]\n' + long.slice(0, 1800) + '…\n```')
+  expect(toolSummary('Bash', { command: long })).toBe('`⚙️[Bash]`\n```bash\n' + long.slice(0, 1800) + '…\n```')
 })
 
 test('toolSummary は1800字以下の bash を省略しない', () => {
   const long = 'echo ' + 'x'.repeat(495)
-  expect(toolSummary('Bash', { command: long })).toBe('```bash\n⚙️[Bash]\n' + long + '\n```')
+  expect(toolSummary('Bash', { command: long })).toBe('`⚙️[Bash]`\n```bash\n' + long + '\n```')
 })
 
 test('toolSummary は引数が無ければツール名のみにする', () => {
@@ -147,7 +163,7 @@ test('toolSummary はバッククォートを含む本文をコードブロッ�
 
 test('toolSummary は本文中の ``` をゼロ幅スペースで分断する', () => {
   const z = String.fromCharCode(0x200b)
-  expect(toolSummary('Bash', { command: 'cat ```x```' })).toBe(`\`\`\`bash\n⚙️[Bash]\ncat \`${z}\`${z}\`x\`${z}\`${z}\`\n\`\`\``)
+  expect(toolSummary('Bash', { command: 'cat ```x```' })).toBe(`\`⚙️[Bash]\`\n\`\`\`bash\ncat \`${z}\`${z}\`x\`${z}\`${z}\`\n\`\`\``)
 })
 
 test('thinkingGist は先頭1-2文を要点として返す', () => {

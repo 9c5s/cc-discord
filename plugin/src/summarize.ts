@@ -10,11 +10,16 @@ const COMMAND_LIMIT = 1800
 const DETAIL_LIMIT = 200
 
 // 絵文字を含む全体を 1行かつバッククォート無しならインラインコード それ以外はコードブロックで囲む
-// 本文に ` があるとインラインコードの囲みが壊れるためブロックに逃がし
-// ブロック内で終端と衝突する ``` の連なりは ZWSP を挟んで分断する
-// lang を渡すとコードブロックの開始 ``` 直後に置きシンタックスハイライトさせる (インラインでは無視する)
-function code(body: string, lang = ''): string {
+// 本文に ` があるとインラインコードの囲みが壊れるためブロックに逃がす
+function code(body: string): string {
   if (!body.includes('\n') && !body.includes('`')) return `\`${body}\``
+  return codeBlock(body)
+}
+
+// 本文を常にコードブロックで囲む (1行の command もブロックにしてハイライトを効かせるため)
+// ブロック内で終端と衝突する ``` の連なりは ZWSP を挟んで分断する
+// lang を渡すとコードブロックの開始 ``` 直後に置きシンタックスハイライトさせる
+function codeBlock(body: string, lang = ''): string {
   return `\`\`\`${lang}\n${body.replaceAll('```', `\`${ZWSP}\`${ZWSP}\``)}\n\`\`\``
 }
 
@@ -94,11 +99,34 @@ function pickDetail(input: Record<string, unknown>): { key: string; value: strin
   return undefined
 }
 
+// command ツールをヘッダー行と command ブロックの2段構成にする
+// ヘッダーは `⚙️[ツール名] description` のインラインコードで description は空白を正規化し 200 字に丸める
+// command は 1800 字上限で単独のブロックに置き COMMAND_LANGS にあるツールだけ言語指定でハイライトさせる
+// ZWSP 展開による超過を防ぐため全体が 1900 コードポイントを超える場合は command を短縮する
+function commandSummary(n: string, input: Record<string, unknown>, command: string): string {
+  const rawDesc = input.description
+  const desc = typeof rawDesc === 'string' && rawDesc.trim()
+    ? ` ${truncate(rawDesc.replace(/\s+/g, ' ').trim(), DETAIL_LIMIT)}`
+    : ''
+  const header = code(`⚙️[${n}]${desc}`)
+  const lang = COMMAND_LANGS.get(n) ?? ''
+  let body = truncate(command, COMMAND_LIMIT)
+  let block = codeBlock(body, lang)
+  let bodyPoints = [...body]
+  // ZWSP 展開で全体が 1900 を超える場合は command を短縮するループ
+  while (bodyPoints.length > 0 && [...header].length + 1 + [...block].length > 1900) {
+    bodyPoints = bodyPoints.slice(0, -1)
+    body = bodyPoints.length > 0 ? bodyPoints.join('') + '…' : ''
+    block = codeBlock(body, lang)
+  }
+  return `${header}\n${block}`
+}
+
 // tool_input から代表的な引数を1つ選び 絵文字とツール名と本文をまとめてコード整形する
 // どのキーも `⚙️[ツール名] 補足` の空白区切り1行 (`⚙️[Edit] watch.ts` / `⚙️[Agent] ログ調査`) とするが
-// command と改行/バッククォート入りや上限超の本文はツール名の後で改行しコードブロックにする
-// 本文の上限は command が 1800 字 その他は 200 字で 超過分は切り捨てて ... を付ける
-// COMMAND_LANGS にあるツールの command ブロックは言語指定を付けてシンタックスハイライトさせる
+// command は commandSummary のヘッダー行と command ブロックの2段構成にする
+// 改行/バッククォート入りや上限超の本文はツール名の後で改行しコードブロックにする
+// 本文の上限は 200 字で 超過分は切り捨てて ... を付ける
 // hideBody が true または HIDE_BODY_TOOLS のツールは本文を出さずツール名のみにする
 // ZWSP 展開による超過を防ぐため最終ブロックが 1900 コードポイントを超える場合は本文を短縮する
 export function toolSummary(name: string, input: Record<string, unknown>, hideBody = false): string {
@@ -109,17 +137,17 @@ export function toolSummary(name: string, input: Record<string, unknown>, hideBo
   if (typeof fp === 'string') return code(`⚙️[${n}] ${truncate(fileName(fp), DETAIL_LIMIT)}`)
   const detail = pickDetail(input)
   if (!detail) return code(`⚙️[${n}]`)
-  let body = truncate(detail.value, detail.key === 'command' ? COMMAND_LIMIT : DETAIL_LIMIT)
-  if (detail.key === 'command' || body !== detail.value || body.includes('\n') || body.includes('`')) {
+  if (detail.key === 'command') return commandSummary(n, input, detail.value)
+  let body = truncate(detail.value, DETAIL_LIMIT)
+  if (body !== detail.value || body.includes('\n') || body.includes('`')) {
     const header = `⚙️[${n}]\n`
-    const lang = detail.key === 'command' ? COMMAND_LANGS.get(n) ?? '' : ''
-    let block = code(`${header}${body}`, lang)
+    let block = code(`${header}${body}`)
     let bodyPoints = [...body]
     // ZWSP 展開で 1900 を超える場合は本文を短縮するループ
     while (bodyPoints.length > 0 && [...block].length > 1900) {
       bodyPoints = bodyPoints.slice(0, -1)
       body = bodyPoints.length > 0 ? bodyPoints.join('') + '…' : ''
-      block = code(`${header}${body}`, lang)
+      block = code(`${header}${body}`)
     }
     return block
   }

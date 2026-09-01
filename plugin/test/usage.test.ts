@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -350,6 +350,19 @@ test('ensureFresh は他プロセスがロック中なら起動しない', () =>
   })
   expect(spawned).toBe(false)
   expect(readJson(p)._attempted_at).toBe(0)
+})
+
+test('ensureFresh は試行時刻を書き込めなくても例外を投げない', () => {
+  // キャッシュのパスがディレクトリだと writeAtomic の rename が失敗する
+  const p = tmpFile('cache.json')
+  mkdirSync(p)
+  let spawned = false
+  expect(() =>
+    ensureFresh(p, () => {
+      spawned = true
+    }),
+  ).not.toThrow()
+  expect(spawned).toBe(false)
 })
 
 test('ensureFresh は残置された古いロックを奪って起動する', () => {

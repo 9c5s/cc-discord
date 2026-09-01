@@ -287,19 +287,24 @@ function isCacheCurrent(cache: J): boolean {
 // 結果は待たず次回の描画へ反映する (statusline の表示を遅延させないため)
 // 起動判断と試行時刻の記録をロック内で行い 同時に走る tee プロセス間での二重取得を防ぐ
 // ロックを取れなかった側は他プロセスが起動したとみなして何もしない
+// キャッシュを書けない場合も例外は外へ出さない (補助的な更新で呼び出し元の描画を止めないため)
 export function ensureFresh(path = usageCachePath(), spawnFn = spawnRefresh): void {
-  if (isCacheCurrent(readCache(path))) return
+  try {
+    if (isCacheCurrent(readCache(path))) return
 
-  const won = withLock(path, (locked) => {
-    if (!locked) return false
-    // ロックを取るまでの間に別プロセスが試行済みなら起動しない
-    const latest = readCache(path)
-    if (isCacheCurrent(latest)) return false
-    latest._attempted_at = nowSec()
-    writeAtomic(path, JSON.stringify(latest))
-    return true
-  })
-  if (won) spawnFn()
+    const won = withLock(path, (locked) => {
+      if (!locked) return false
+      // ロックを取るまでの間に別プロセスが試行済みなら起動しない
+      const latest = readCache(path)
+      if (isCacheCurrent(latest)) return false
+      latest._attempted_at = nowSec()
+      writeAtomic(path, JSON.stringify(latest))
+      return true
+    })
+    if (won) spawnFn()
+  } catch {
+    // 更新を依頼できなくても次回の描画で再試行される
+  }
 }
 
 // 直接実行されたときはキャッシュ更新のみ行う (spawnRefresh の実体)

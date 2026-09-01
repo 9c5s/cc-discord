@@ -10,8 +10,8 @@ import { mkdirSync, writeFileSync, renameSync } from 'fs'
 import { join } from 'path'
 import { stateDir } from './routes'
 import { ownerFromDir } from './normalize'
-import { buildStatusBlock, readBranch, readModelUsageSuffix } from './status'
-import { ensureFresh, withCachedWeekly } from './usage'
+import { buildStatusBlock, modelUsageSuffix, readBranch } from './status'
+import { ensureFresh, readCachedUsage, withCachedWeekly } from './usage'
 
 const raw = await new Response(Bun.stdin.stream()).text()
 
@@ -45,9 +45,16 @@ try {
     writeAtomic(join(dir, `${owner}.json`), raw)
     // モデル別枠のキャッシュが古ければ更新を別プロセスへ依頼する (結果は次回に反映する)
     ensureFresh()
+    // 7d 全体とモデル別枠は同じ読み取り結果から導出する
+    // 別々に読むと更新の子プロセスが間に割り込んだとき時点の違う値が並ぶ
+    const usage = readCachedUsage()
     writeAtomic(
       join(dir, `${owner}.txt`),
-      buildStatusBlock(withCachedWeekly(data), readBranch(pd), readModelUsageSuffix()),
+      buildStatusBlock(
+        withCachedWeekly(data, usage.weekly),
+        readBranch(pd),
+        modelUsageSuffix(usage.modelScoped),
+      ),
     )
   }
 } catch (err) {

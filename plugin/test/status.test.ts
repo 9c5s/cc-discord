@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { buildStatusBlock, readBranch, readModelUsageSuffix } from '../src/status'
+import { buildStatusBlock, modelUsageSuffix, readBranch } from '../src/status'
 
 // 注: bun test はタイムゾーンを UTC に固定するため リセット時刻の期待値は UTC 表記である
 // 1781086200 = 2026-06-10 10: 10 UTC, 1781406000 = 2026-06-14 03: 00 UTC
@@ -118,60 +118,19 @@ test('buildStatusBlock は 5h には併記しない', () => {
   expect(buildStatusBlock(d, null, '(88%)')).toBe('```\n⏰ 50%\n```')
 })
 
-test('readModelUsageSuffix はモデル別枠の最大値を括弧表記で返す', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'usage-'))
-  const p = join(dir, 'usage.json')
-  writeFileSync(
-    p,
-    JSON.stringify({
-      _cached_at: Date.now() / 1000,
-      data: [
-        { display_name: 'Sonnet', percent: 10 },
-        { display_name: 'Fable', percent: 88 },
-      ],
-    }),
-  )
-  expect(readModelUsageSuffix(p)).toBe('(88%)')
+test('modelUsageSuffix はモデル別枠の最大値を括弧表記で返す', () => {
+  expect(
+    modelUsageSuffix([
+      { display_name: 'Sonnet', percent: 10, resets_at: null },
+      { display_name: 'Fable', percent: 88, resets_at: null },
+    ]),
+  ).toBe('(88%)')
 })
 
-test('readModelUsageSuffix は古すぎるキャッシュを使わない', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'usage-'))
-  const p = join(dir, 'stale.json')
-  writeFileSync(
-    p,
-    JSON.stringify({
-      _cached_at: Date.now() / 1000 - 901,
-      data: [{ display_name: 'Fable', percent: 88 }],
-    }),
-  )
-  expect(readModelUsageSuffix(p)).toBe('')
+test('modelUsageSuffix は枠が無ければ空文字を返す', () => {
+  expect(modelUsageSuffix([])).toBe('')
 })
 
-test('readModelUsageSuffix はキャッシュが無ければ空文字を返す', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'usage-'))
-  expect(readModelUsageSuffix(join(dir, 'absent.json'))).toBe('')
-})
-
-test('readModelUsageSuffix は data が空配列なら空文字を返す', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'usage-'))
-  const p = join(dir, 'empty.json')
-  writeFileSync(p, JSON.stringify({ _cached_at: Date.now() / 1000, data: [] }))
-  expect(readModelUsageSuffix(p)).toBe('')
-})
-
-test('readModelUsageSuffix は壊れた JSON でも空文字を返す', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'usage-'))
-  const p = join(dir, 'broken.json')
-  writeFileSync(p, '{invalid')
-  expect(readModelUsageSuffix(p)).toBe('')
-})
-
-test('readModelUsageSuffix は percent が数値でない要素を無視する', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'usage-'))
-  const p = join(dir, 'mixed.json')
-  writeFileSync(
-    p,
-    JSON.stringify({ _cached_at: Date.now() / 1000, data: [{ display_name: 'Fable', percent: null }] }),
-  )
-  expect(readModelUsageSuffix(p)).toBe('')
+test('modelUsageSuffix は小数の利用率を四捨五入する', () => {
+  expect(modelUsageSuffix([{ display_name: 'Fable', percent: 87.6, resets_at: null }])).toBe('(88%)')
 })

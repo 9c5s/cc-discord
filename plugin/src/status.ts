@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs'
 import { join, resolve } from 'path'
-import { readModelUsage, usageCachePath } from './usage'
+import type { ModelUsageEntry } from './usage'
 
 // statusline JSON からリプライ末尾に付ける3行ステータスブロックを構築するモジュール
 // statusline-tee.ts が書き込み discord プラグイン server.ts (patch) が読んで reply 末尾に付ける
@@ -47,13 +47,12 @@ function resetDate(ts: number): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${resetTime(ts)}`
 }
 
-// モデル別週次枠のキャッシュから 7d へ併記する表記を作る
-// この経路では HTTP を発行せず読むだけに留める (取得と更新は usage.ts が別プロセスで担う)
+// モデル別週次枠から 7d へ併記する表記を作る
 // 複数のモデル枠がある場合は上限に最も近いものを採用する
-// 読めない場合は空文字を返し括弧自体を出さない
-export function readModelUsageSuffix(path = usageCachePath()): string {
+// 枠が無ければ空文字を返し括弧自体を出さない
+export function modelUsageSuffix(entries: ModelUsageEntry[]): string {
   let top = -1
-  for (const e of readModelUsage(path)) {
+  for (const e of entries) {
     if (e.percent > top) top = e.percent
   }
   return top < 0 ? '' : `(${Math.round(top)}%)`

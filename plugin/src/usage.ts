@@ -1,14 +1,5 @@
 import { spawn } from 'child_process'
-import {
-  closeSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from 'fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
 import { stateDir } from './routes'
@@ -46,7 +37,6 @@ const API_TIMEOUT_MS = 5_000
 const TTL_SEC = 300 // キャッシュの保持時間
 const RETRY_SEC = 60 // 取得失敗時に再試行を抑制する間隔
 const STALE_SEC = 900 // この時間を超えて更新できていないキャッシュは表示に使わない
-const LOCK_STALE_MS = 30_000 // これより古いロックは異常終了の残置とみなして奪う
 
 export const usageCachePath = (): string => join(stateDir(), 'model-usage.json')
 
@@ -71,51 +61,6 @@ function writeAtomic(path: string, content: string): void {
   const tmp = `${path}.${process.pid}.tmp`
   writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 })
   renameSync(tmp, path)
-}
-
-// ロックを排他的に作る (取れなければ null)
-// 異常終了で残ったロックは LOCK_STALE_MS を過ぎたら奪い 更新が恒久的に止まるのを避ける
-function acquireLock(lockPath: string): number | null {
-  try {
-    return openSync(lockPath, 'wx')
-  } catch {
-    // 既存ロックがあるので寿命を見て奪えるか判断する
-  }
-  try {
-    if (Date.now() - statSync(lockPath).mtimeMs <= LOCK_STALE_MS) return null
-    // 回収はいったん自分専用の名前へ rename して行う
-    // 成功するのは 1 プロセスだけなので 検査後に張り直された他プロセスのロックを消す危険がない
-    const claimed = `${lockPath}.${process.pid}.stale`
-    renameSync(lockPath, claimed)
-    unlinkSync(claimed)
-    return openSync(lockPath, 'wx')
-  } catch {
-    return null
-  }
-}
-
-// `<path>.lock` を使って read-modify-write を直列化する
-// 取得できない場合も fn は locked=false で呼ぶ (可用性を優先し書き込み自体は止めない)
-// 排他が要る処理は locked を見て自分が唯一の実行者かを判断する
-function withLock<T>(path: string, fn: (locked: boolean) => T): T {
-  const lockPath = `${path}.lock`
-  const fd = acquireLock(lockPath)
-  try {
-    return fn(fd !== null)
-  } finally {
-    if (fd !== null) {
-      try {
-        closeSync(fd)
-      } catch {
-        // クローズ失敗は無視する
-      }
-      try {
-        unlinkSync(lockPath)
-      } catch {
-        // 既に消えている場合は無視する
-      }
-    }
-  }
 }
 
 // 認証情報から有効な access token を読む
@@ -237,22 +182,21 @@ function toStoredEntry(item: unknown): ModelUsageEntry | null {
 
 // API を取得してキャッシュを更新する (別プロセスから呼ばれる想定)
 // 失敗時も試行時刻だけ記録し既存データは保持する
+// 同時に走った更新どうしは互いを上書きしうるが どちらも同時点のスナップショットなので害はない
 export async function refreshModelUsage(
   path = usageCachePath(),
   fetchFn = fetchUsageSnapshot,
 ): Promise<void> {
   const snapshot = await fetchFn()
   const now = nowSec()
-  withLock(path, () => {
-    const cache = readCache(path)
-    cache._attempted_at = now
-    if (snapshot !== null) {
-      cache._cached_at = now
-      cache.data = snapshot.modelScoped
-      cache.weekly = snapshot.weekly
-    }
-    writeAtomic(path, JSON.stringify(cache))
-  })
+  const cache = readCache(path)
+  cache._attempted_at = now
+  if (snapshot !== null) {
+    cache._cached_at = now
+    cache.data = snapshot.modelScoped
+    cache.weekly = snapshot.weekly
+  }
+  writeAtomic(path, JSON.stringify(cache))
 }
 
 // rate_limits.seven_day を与えられた週次値へ差し替える
@@ -289,23 +233,16 @@ function isCacheCurrent(cache: J): boolean {
 
 // キャッシュが古ければ更新を別プロセスへ依頼する
 // 結果は待たず次回の描画へ反映する (statusline の表示を遅延させないため)
-// 起動判断と試行時刻の記録をロック内で行い 同時に走る tee プロセス間での二重取得を防ぐ
-// ロックを取れなかった側は他プロセスが起動したとみなして何もしない
+// 起動前に試行時刻を記録し 後続の描画が RETRY_SEC の間は再依頼しないようにする
+// 同時刻に走った tee プロセスどうしは重複して依頼しうるが 余分な取得が1回増えるだけで実害は無い
 // キャッシュを書けない場合も例外は外へ出さない (補助的な更新で呼び出し元の描画を止めないため)
 export function ensureFresh(path = usageCachePath(), spawnFn = spawnRefresh): void {
   try {
-    if (isCacheCurrent(readCache(path))) return
-
-    const won = withLock(path, (locked) => {
-      if (!locked) return false
-      // ロックを取るまでの間に別プロセスが試行済みなら起動しない
-      const latest = readCache(path)
-      if (isCacheCurrent(latest)) return false
-      latest._attempted_at = nowSec()
-      writeAtomic(path, JSON.stringify(latest))
-      return true
-    })
-    if (won) spawnFn()
+    const cache = readCache(path)
+    if (isCacheCurrent(cache)) return
+    cache._attempted_at = nowSec()
+    writeAtomic(path, JSON.stringify(cache))
+    spawnFn()
   } catch {
     // 更新を依頼できなくても次回の描画で再試行される
   }

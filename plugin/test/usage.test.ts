@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -340,7 +340,7 @@ test('ensureFresh はキャッシュが無ければ起動する', () => {
   expect(spawned).toBe(true)
 })
 
-test('ensureFresh は起動前に試行時刻を記録して二重取得を防ぐ', () => {
+test('ensureFresh は起動前に試行時刻を記録し RETRY_SEC の間は再依頼しない', () => {
   const p = tmpFile('cache.json')
   writeJson(p, { _cached_at: 0, _attempted_at: 0, data: [] })
   ensureFresh(p, () => {})
@@ -354,18 +354,6 @@ test('ensureFresh は起動前に試行時刻を記録して二重取得を防�
   expect(spawned).toBe(false)
 })
 
-test('ensureFresh は他プロセスがロック中なら起動しない', () => {
-  const p = tmpFile('cache.json')
-  writeJson(p, { _cached_at: 0, _attempted_at: 0, data: [] })
-  writeFileSync(`${p}.lock`, '')
-  let spawned = false
-  ensureFresh(p, () => {
-    spawned = true
-  })
-  expect(spawned).toBe(false)
-  expect(readJson(p)._attempted_at).toBe(0)
-})
-
 test('ensureFresh は試行時刻を書き込めなくても例外を投げない', () => {
   // キャッシュのパスがディレクトリだと writeAtomic の rename が失敗する
   const p = tmpFile('cache.json')
@@ -377,20 +365,6 @@ test('ensureFresh は試行時刻を書き込めなくても例外を投げな�
     }),
   ).not.toThrow()
   expect(spawned).toBe(false)
-})
-
-test('ensureFresh は残置された古いロックを奪って起動する', () => {
-  const p = tmpFile('cache.json')
-  writeJson(p, { _cached_at: 0, _attempted_at: 0, data: [] })
-  const lock = `${p}.lock`
-  writeFileSync(lock, '')
-  const stale = new Date(Date.now() - 31_000)
-  utimesSync(lock, stale, stale)
-  let spawned = false
-  ensureFresh(p, () => {
-    spawned = true
-  })
-  expect(spawned).toBe(true)
 })
 
 // --- 7d 全体の差し替え ---

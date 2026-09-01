@@ -2,9 +2,10 @@
 // 拒否時は exit 2 で stderr の理由が Claude に返り 日本語で書き直して再実行される
 // 対象は description を持つ全ツールで Bash / PowerShell は description 自体を必須にする
 
-// ひらがな カタカナ CJK 統合漢字のいずれかを含めば日本語とみなす
+// ひらがな カタカナ 漢字のいずれかを含めば日本語とみなす
 // 技術用語やコード識別子だけの英文説明を弾くための最小の判定である
-const JA_RE = /[぀-ヿ一-鿿]/
+// 中黒や長音記号は script が Common で文字自体は日本語でないため字種の指定で除外する
+const JA_RE = /[\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Han}]/u
 
 // description を必須とするツール (コマンド通知の説明表示に使うため欠落も拒否する)
 const REQUIRE_DESC = new Set(['Bash', 'PowerShell'])

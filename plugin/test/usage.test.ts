@@ -1,8 +1,9 @@
 import { test, expect } from 'bun:test'
 import { mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import {
+  credentialsPath,
   ensureFresh,
   fetchUsageSnapshot,
   readAccessToken,
@@ -44,6 +45,32 @@ const WEEKLY_SCOPED = {
   resets_at: '2026-08-23T02:59:59+00:00',
   scope: { model: { id: null, display_name: 'Fable' }, surface: null },
 }
+
+// 環境変数を差し替えて元に戻す
+function withEnv<T>(name: string, value: string | undefined, fn: () => T): T {
+  const original = process.env[name]
+  if (value === undefined) delete process.env[name]
+  else process.env[name] = value
+  try {
+    return fn()
+  } finally {
+    if (original === undefined) delete process.env[name]
+    else process.env[name] = original
+  }
+}
+
+// --- credentialsPath ---
+
+test('credentialsPath は CLAUDE_CONFIG_DIR 配下を指す', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cfg-'))
+  expect(withEnv('CLAUDE_CONFIG_DIR', dir, credentialsPath)).toBe(join(dir, '.credentials.json'))
+})
+
+test('credentialsPath は CLAUDE_CONFIG_DIR が無ければホーム配下の .claude を指す', () => {
+  expect(withEnv('CLAUDE_CONFIG_DIR', undefined, credentialsPath)).toBe(
+    join(homedir(), '.claude', '.credentials.json'),
+  )
+})
 
 // --- readAccessToken ---
 

@@ -49,7 +49,10 @@ const STALE_SEC = 900 // この時間を超えて更新できていないキャ�
 const LOCK_STALE_MS = 30_000 // これより古いロックは異常終了の残置とみなして奪う
 
 export const usageCachePath = (): string => join(stateDir(), 'model-usage.json')
-const credentialsPath = (): string => join(homedir(), '.claude', '.credentials.json')
+
+// 認証情報の場所 (CLAUDE_CONFIG_DIR を使う分離プロファイルにも追随する)
+export const credentialsPath = (): string =>
+  join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), '.credentials.json')
 
 const nowSec = (): number => Date.now() / 1000
 
@@ -80,7 +83,11 @@ function acquireLock(lockPath: string): number | null {
   }
   try {
     if (Date.now() - statSync(lockPath).mtimeMs <= LOCK_STALE_MS) return null
-    unlinkSync(lockPath)
+    // 回収はいったん自分専用の名前へ rename して行う
+    // 成功するのは 1 プロセスだけなので 検査後に張り直された他プロセスのロックを消す危険がない
+    const claimed = `${lockPath}.${process.pid}.stale`
+    renameSync(lockPath, claimed)
+    unlinkSync(claimed)
     return openSync(lockPath, 'wx')
   } catch {
     return null

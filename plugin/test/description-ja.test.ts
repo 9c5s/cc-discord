@@ -19,6 +19,15 @@ test('checkDescription は英語のみの description を拒否する', () => {
   expect(reason).toContain('List files')
 })
 
+test('checkDescription は日本語の約物だけを含む英文を拒否する', () => {
+  expect(checkDescription('Bash', { command: 'ls', description: 'List files ・' })).toContain(
+    '日本語で書き直す',
+  )
+  expect(checkDescription('Bash', { command: 'ls', description: 'APIーCLI bridge' })).toContain(
+    '日本語で書き直す',
+  )
+})
+
 test('checkDescription は Bash の description 欠落を拒否する', () => {
   expect(checkDescription('Bash', { command: 'ls' })).toContain('日本語のコマンド説明')
 })

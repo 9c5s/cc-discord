@@ -18,9 +18,11 @@ function code(body: string): string {
 
 // 本文を常にコードブロックで囲む (1行の command もブロックにしてハイライトを効かせるため)
 // ブロック内で終端と衝突する ``` の連なりは ZWSP を挟んで分断する
+// 3個以上の連なりは全体を1つの塊として扱う (3個ずつ置換すると余りが再び ``` を作るため)
 // lang を渡すとコードブロックの開始 ``` 直後に置きシンタックスハイライトさせる
 function codeBlock(body: string, lang = ''): string {
-  return `\`\`\`${lang}\n${body.replaceAll('```', `\`${ZWSP}\`${ZWSP}\``)}\n\`\`\``
+  const split = body.replace(/`{3,}/g, (run) => [...run].join(ZWSP))
+  return `\`\`\`${lang}\n${split}\n\`\`\``
 }
 
 // バックスラッシュ区切りにも対応してパスからファイル名を取り出す

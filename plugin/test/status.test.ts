@@ -124,6 +124,7 @@ test('readModelUsageSuffix はモデル別枠の最大値を括弧表記で返�
   writeFileSync(
     p,
     JSON.stringify({
+      _cached_at: Date.now() / 1000,
       data: [
         { display_name: 'Sonnet', percent: 10 },
         { display_name: 'Fable', percent: 88 },
@@ -131,6 +132,19 @@ test('readModelUsageSuffix はモデル別枠の最大値を括弧表記で返�
     }),
   )
   expect(readModelUsageSuffix(p)).toBe('(88%)')
+})
+
+test('readModelUsageSuffix は古すぎるキャッシュを使わない', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'usage-'))
+  const p = join(dir, 'stale.json')
+  writeFileSync(
+    p,
+    JSON.stringify({
+      _cached_at: Date.now() / 1000 - 901,
+      data: [{ display_name: 'Fable', percent: 88 }],
+    }),
+  )
+  expect(readModelUsageSuffix(p)).toBe('')
 })
 
 test('readModelUsageSuffix はキャッシュが無ければ空文字を返す', () => {
@@ -141,7 +155,7 @@ test('readModelUsageSuffix はキャッシュが無ければ空文字を返す',
 test('readModelUsageSuffix は data が空配列なら空文字を返す', () => {
   const dir = mkdtempSync(join(tmpdir(), 'usage-'))
   const p = join(dir, 'empty.json')
-  writeFileSync(p, JSON.stringify({ data: [] }))
+  writeFileSync(p, JSON.stringify({ _cached_at: Date.now() / 1000, data: [] }))
   expect(readModelUsageSuffix(p)).toBe('')
 })
 
@@ -157,7 +171,7 @@ test('readModelUsageSuffix は percent が数値でない要素を無視する',
   const p = join(dir, 'mixed.json')
   writeFileSync(
     p,
-    JSON.stringify({ data: [{ display_name: 'Fable', percent: null }] }),
+    JSON.stringify({ _cached_at: Date.now() / 1000, data: [{ display_name: 'Fable', percent: null }] }),
   )
   expect(readModelUsageSuffix(p)).toBe('')
 })

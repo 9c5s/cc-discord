@@ -173,6 +173,11 @@ test('toolSummary は本文中の ``` をゼロ幅スペースで分断する', 
   expect(toolSummary('Bash', { command: 'cat ```x```' })).toBe(`\`⚙️[Bash]\`\n\`\`\`bash\ncat \`${z}\`${z}\`x\`${z}\`${z}\`\n\`\`\``)
 })
 
+test('toolSummary は 3 の倍数でない長さのバッククォート連も分断する', () => {
+  const z = String.fromCharCode(0x200b)
+  expect(toolSummary('Bash', { command: 'a`````b' })).toBe(`\`⚙️[Bash]\`\n\`\`\`bash\na\`${z}\`${z}\`${z}\`${z}\`b\n\`\`\``)
+})
+
 test('thinkingGist は先頭1-2文を要点として返す', () => {
   expect(thinkingGist('まず確認する。次に実装する。最後にテスト。')).toBe('🧠 まず確認する。次に実装する。')
 })

@@ -5,6 +5,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'fs'
@@ -44,6 +45,8 @@ const API_URL = 'https://api.anthropic.com/api/oauth/usage'
 const API_TIMEOUT_MS = 5_000
 const TTL_SEC = 300 // キャッシュの保持時間
 const RETRY_SEC = 60 // 取得失敗時に再試行を抑制する間隔
+const STALE_SEC = 900 // この時間を超えて更新できていないキャッシュは表示に使わない
+const LOCK_STALE_MS = 30_000 // これより古いロックは異常終了の残置とみなして奪う
 
 export const usageCachePath = (): string => join(stateDir(), 'model-usage.json')
 const credentialsPath = (): string => join(homedir(), '.claude', '.credentials.json')
@@ -67,18 +70,31 @@ function writeAtomic(path: string, content: string): void {
   renameSync(tmp, path)
 }
 
-// `<path>.lock` を使って read-modify-write を直列化する
-// 取得できない場合も処理は続行する (可用性を優先し stale lock でも停止しない)
-function withLock<T>(path: string, fn: () => T): T {
-  const lockPath = `${path}.lock`
-  let fd: number | null = null
+// ロックを排他的に作る (取れなければ null)
+// 異常終了で残ったロックは LOCK_STALE_MS を過ぎたら奪い 更新が恒久的に止まるのを避ける
+function acquireLock(lockPath: string): number | null {
   try {
-    fd = openSync(lockPath, 'wx')
+    return openSync(lockPath, 'wx')
   } catch {
-    fd = null
+    // 既存ロックがあるので寿命を見て奪えるか判断する
   }
   try {
-    return fn()
+    if (Date.now() - statSync(lockPath).mtimeMs <= LOCK_STALE_MS) return null
+    unlinkSync(lockPath)
+    return openSync(lockPath, 'wx')
+  } catch {
+    return null
+  }
+}
+
+// `<path>.lock` を使って read-modify-write を直列化する
+// 取得できない場合も fn は locked=false で呼ぶ (可用性を優先し書き込み自体は止めない)
+// 排他が要る処理は locked を見て自分が唯一の実行者かを判断する
+function withLock<T>(path: string, fn: (locked: boolean) => T): T {
+  const lockPath = `${path}.lock`
+  const fd = acquireLock(lockPath)
+  try {
+    return fn(fd !== null)
   } finally {
     if (fd !== null) {
       try {
@@ -169,9 +185,18 @@ export async function fetchUsageSnapshot(
   }
 }
 
+// 最後に取得できてから STALE_SEC 以内かを判定する
+// 認証切れなどで更新が止まった際に古い値を出し続けないための足切りである
+function isFresh(cache: J): boolean {
+  const cachedAt = num(cache._cached_at)
+  return cachedAt !== null && nowSec() - cachedAt < STALE_SEC
+}
+
 // キャッシュからモデル別枠を読む (表示側が使う経路で HTTP は発行しない)
 export function readModelUsage(path = usageCachePath()): ModelUsageEntry[] {
-  const data = readCache(path).data
+  const cache = readCache(path)
+  if (!isFresh(cache)) return []
+  const data = cache.data
   if (!Array.isArray(data)) return []
   return data.map(toStoredEntry).filter((e): e is ModelUsageEntry => e !== null)
 }
@@ -206,9 +231,11 @@ export async function refreshModelUsage(
   })
 }
 
-// キャッシュの 7d 全体を読む (無ければ null)
+// キャッシュの 7d 全体を読む (無い・古すぎる場合は null)
 export function readCachedWeekly(path = usageCachePath()): WeeklyBucket | null {
-  const w = obj(readCache(path).weekly)
+  const cache = readCache(path)
+  if (!isFresh(cache)) return null
+  const w = obj(cache.weekly)
   if (!w) return null
   const percent = num(w.used_percentage)
   const resets = num(w.resets_at)
@@ -218,7 +245,7 @@ export function readCachedWeekly(path = usageCachePath()): WeeklyBucket | null {
 
 // rate_limits.seven_day をキャッシュの週次値へ差し替える
 // 括弧内のモデル別枠と同じ取得時点の値を並べるためである
-// キャッシュに週次の値が無ければ元の data をそのまま返す
+// キャッシュに週次の値が無い または古すぎる場合は元の data をそのまま返す
 export function withCachedWeekly(data: J, path = usageCachePath()): J {
   const weekly = readCachedWeekly(path)
   const rl = obj(data.rate_limits)
@@ -229,9 +256,11 @@ export function withCachedWeekly(data: J, path = usageCachePath()): J {
 // 更新用の子プロセスをデタッチして起動する
 function spawnRefresh(): void {
   try {
+    // windowsHide は Windows で更新のたびにコンソール窓が現れるのを抑止する
     const child = spawn(process.execPath, [import.meta.path], {
       detached: true,
       stdio: 'ignore',
+      windowsHide: true,
     })
     child.unref()
   } catch {
@@ -239,22 +268,31 @@ function spawnRefresh(): void {
   }
 }
 
+// 更新が不要なキャッシュかを判定する
+// 保持時間内のデータがある もしくは直近に取得を試みたばかりの場合は再取得しない
+function isCacheCurrent(cache: J): boolean {
+  const now = nowSec()
+  if (Array.isArray(cache.data) && now - (num(cache._cached_at) ?? 0) < TTL_SEC) return true
+  return now - (num(cache._attempted_at) ?? 0) < RETRY_SEC
+}
+
 // キャッシュが古ければ更新を別プロセスへ依頼する
 // 結果は待たず次回の描画へ反映する (statusline の表示を遅延させないため)
-// 起動前に試行時刻を記録し 同時に走る tee プロセス間での二重取得を防ぐ
+// 起動判断と試行時刻の記録をロック内で行い 同時に走る tee プロセス間での二重取得を防ぐ
+// ロックを取れなかった側は他プロセスが起動したとみなして何もしない
 export function ensureFresh(path = usageCachePath(), spawnFn = spawnRefresh): void {
-  const cache = readCache(path)
-  const now = nowSec()
-  const hasData = Array.isArray(cache.data)
-  if (hasData && now - (num(cache._cached_at) ?? 0) < TTL_SEC) return
-  if (now - (num(cache._attempted_at) ?? 0) < RETRY_SEC) return
+  if (isCacheCurrent(readCache(path))) return
 
-  withLock(path, () => {
+  const won = withLock(path, (locked) => {
+    if (!locked) return false
+    // ロックを取るまでの間に別プロセスが試行済みなら起動しない
     const latest = readCache(path)
-    latest._attempted_at = now
+    if (isCacheCurrent(latest)) return false
+    latest._attempted_at = nowSec()
     writeAtomic(path, JSON.stringify(latest))
+    return true
   })
-  spawnFn()
+  if (won) spawnFn()
 }
 
 // 直接実行されたときはキャッシュ更新のみ行う (spawnRefresh の実体)

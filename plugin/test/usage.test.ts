@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { mkdtempSync, readFileSync, writeFileSync } from 'fs'
+import { mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -21,6 +21,8 @@ const writeJson = (path: string, value: unknown): void => {
 }
 const readJson = (path: string): Record<string, unknown> =>
   JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+
+const nowSec = (): number => Date.now() / 1000
 
 // グローバル fetch を差し替えて元に戻す
 async function withFetch<T>(impl: typeof fetch, fn: () => Promise<T>): Promise<T> {
@@ -203,7 +205,7 @@ test('fetchUsageSnapshot は通信例外でも null を返す', async () => {
 
 test('readModelUsage はキャッシュのエントリを返す', () => {
   const p = tmpFile('cache.json')
-  writeJson(p, { data: [{ display_name: 'Fable', percent: 88, resets_at: 123 }] })
+  writeJson(p, { _cached_at: nowSec(), data: [{ display_name: 'Fable', percent: 88, resets_at: 123 }] })
   expect(readModelUsage(p)).toEqual([{ display_name: 'Fable', percent: 88, resets_at: 123 }])
 })
 
@@ -213,7 +215,19 @@ test('readModelUsage はキャッシュが無ければ空配列を返す', () =>
 
 test('readModelUsage は percent が数値でない要素を除外する', () => {
   const p = tmpFile('cache.json')
-  writeJson(p, { data: [{ display_name: 'Fable', percent: null }, 'junk'] })
+  writeJson(p, { _cached_at: nowSec(), data: [{ display_name: 'Fable', percent: null }, 'junk'] })
+  expect(readModelUsage(p)).toEqual([])
+})
+
+test('readModelUsage は取得時刻の無いキャッシュを使わない', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { data: [{ display_name: 'Fable', percent: 88, resets_at: 123 }] })
+  expect(readModelUsage(p)).toEqual([])
+})
+
+test('readModelUsage は STALE_SEC を超えて古いキャッシュを使わない', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { _cached_at: nowSec() - 901, data: [{ display_name: 'Fable', percent: 88, resets_at: 123 }] })
   expect(readModelUsage(p)).toEqual([])
 })
 
@@ -245,8 +259,6 @@ test('refreshModelUsage は失敗時に既存データを保持し試行時刻�
 })
 
 // --- ensureFresh ---
-
-const nowSec = (): number => Date.now() / 1000
 
 test('ensureFresh は TTL 内なら更新を起動しない', () => {
   const p = tmpFile('cache.json')
@@ -301,6 +313,32 @@ test('ensureFresh は起動前に試行時刻を記録して二重取得を防�
   expect(spawned).toBe(false)
 })
 
+test('ensureFresh は他プロセスがロック中なら起動しない', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { _cached_at: 0, _attempted_at: 0, data: [] })
+  writeFileSync(`${p}.lock`, '')
+  let spawned = false
+  ensureFresh(p, () => {
+    spawned = true
+  })
+  expect(spawned).toBe(false)
+  expect(readJson(p)._attempted_at).toBe(0)
+})
+
+test('ensureFresh は残置された古いロックを奪って起動する', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { _cached_at: 0, _attempted_at: 0, data: [] })
+  const lock = `${p}.lock`
+  writeFileSync(lock, '')
+  const stale = new Date(Date.now() - 31_000)
+  utimesSync(lock, stale, stale)
+  let spawned = false
+  ensureFresh(p, () => {
+    spawned = true
+  })
+  expect(spawned).toBe(true)
+})
+
 // --- 7d 全体の差し替え ---
 
 const WEEKLY_CACHE = { used_percentage: 51, resets_at: 1787454000 }
@@ -313,14 +351,14 @@ const STDIN_DATA = {
 
 test('withCachedWeekly はキャッシュの週次値で seven_day を差し替える', () => {
   const p = tmpFile('cache.json')
-  writeJson(p, { weekly: WEEKLY_CACHE })
+  writeJson(p, { _cached_at: nowSec(), weekly: WEEKLY_CACHE })
   const got = withCachedWeekly(STDIN_DATA, p) as Record<string, Record<string, unknown>>
   expect(got.rate_limits.seven_day).toEqual(WEEKLY_CACHE)
 })
 
 test('withCachedWeekly は 5h を差し替えない', () => {
   const p = tmpFile('cache.json')
-  writeJson(p, { weekly: WEEKLY_CACHE })
+  writeJson(p, { _cached_at: nowSec(), weekly: WEEKLY_CACHE })
   const got = withCachedWeekly(STDIN_DATA, p) as Record<string, Record<string, unknown>>
   expect(got.rate_limits.five_hour).toEqual(STDIN_DATA.rate_limits.five_hour)
 })
@@ -329,26 +367,44 @@ test('withCachedWeekly はキャッシュが無ければ元の data を返す', 
   expect(withCachedWeekly(STDIN_DATA, tmpFile('absent.json'))).toEqual(STDIN_DATA)
 })
 
+test('withCachedWeekly は STALE_SEC を超えて古いキャッシュなら元の data を返す', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { _cached_at: nowSec() - 901, weekly: WEEKLY_CACHE })
+  expect(withCachedWeekly(STDIN_DATA, p)).toEqual(STDIN_DATA)
+})
+
 test('withCachedWeekly は元の data を書き換えない', () => {
   const p = tmpFile('cache.json')
-  writeJson(p, { weekly: WEEKLY_CACHE })
+  writeJson(p, { _cached_at: nowSec(), weekly: WEEKLY_CACHE })
   withCachedWeekly(STDIN_DATA, p)
   expect(STDIN_DATA.rate_limits.seven_day.used_percentage).toBe(99)
 })
 
 test('withCachedWeekly は rate_limits が無ければ元の data を返す', () => {
   const p = tmpFile('cache.json')
-  writeJson(p, { weekly: WEEKLY_CACHE })
+  writeJson(p, { _cached_at: nowSec(), weekly: WEEKLY_CACHE })
   const d = { model: { display_name: 'Fable 5' } }
   expect(withCachedWeekly(d, p)).toEqual(d)
 })
 
 test('readCachedWeekly は値が不正なら null を返す', () => {
   const p = tmpFile('cache.json')
-  writeJson(p, { weekly: { used_percentage: null, resets_at: 1 } })
+  writeJson(p, { _cached_at: nowSec(), weekly: { used_percentage: null, resets_at: 1 } })
   expect(readCachedWeekly(p)).toBeNull()
 })
 
 test('readCachedWeekly はキャッシュが無ければ null を返す', () => {
   expect(readCachedWeekly(tmpFile('absent.json'))).toBeNull()
+})
+
+test('readCachedWeekly は取得時刻の無いキャッシュを使わない', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { weekly: WEEKLY_CACHE })
+  expect(readCachedWeekly(p)).toBeNull()
+})
+
+test('readCachedWeekly は STALE_SEC を超えて古いキャッシュを使わない', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { _cached_at: nowSec() - 901, weekly: WEEKLY_CACHE })
+  expect(readCachedWeekly(p)).toBeNull()
 })

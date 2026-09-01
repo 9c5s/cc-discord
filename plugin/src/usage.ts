@@ -34,8 +34,8 @@ export type WeeklyBucket = {
   resets_at: number
 }
 
-// 使用量 API から一度に取り出した週次の使用状況
-// 7d 全体とモデル別枠を同じ応答から取ることで表示時点を揃える
+// 一時点の週次の使用状況 (7d 全体とモデル別枠の組)
+// API 応答からもキャッシュからも常にこの組で受け渡し 表示時点を揃える
 export type UsageSnapshot = {
   weekly: WeeklyBucket | null
   modelScoped: ModelUsageEntry[]
@@ -199,13 +199,30 @@ function isFresh(cache: J): boolean {
   return cachedAt !== null && nowSec() - cachedAt < STALE_SEC
 }
 
-// キャッシュからモデル別枠を読む (表示側が使う経路で HTTP は発行しない)
-export function readModelUsage(path = usageCachePath()): ModelUsageEntry[] {
-  const cache = readCache(path)
-  if (!isFresh(cache)) return []
-  const data = cache.data
+// キャッシュの data 配列をモデル別枠へ変換する
+function toStoredEntries(data: unknown): ModelUsageEntry[] {
   if (!Array.isArray(data)) return []
   return data.map(toStoredEntry).filter((e): e is ModelUsageEntry => e !== null)
+}
+
+// キャッシュの weekly を 7d 全体のバケットへ変換する
+function toStoredWeekly(value: unknown): WeeklyBucket | null {
+  const w = obj(value)
+  if (!w) return null
+  const percent = num(w.used_percentage)
+  const resets = num(w.resets_at)
+  if (percent === null || resets === null) return null
+  return { used_percentage: percent, resets_at: resets }
+}
+
+// キャッシュを1回だけ読んで 7d 全体とモデル別枠をまとめて取り出す
+// 表示側が使う経路で HTTP は発行しない
+// 1回の描画で両方をこの結果から導出することで 描画途中の更新による時点のずれを避ける
+// 古すぎるキャッシュは両方とも捨てる (片方だけ古い値を混ぜないため)
+export function readCachedUsage(path = usageCachePath()): UsageSnapshot {
+  const cache = readCache(path)
+  if (!isFresh(cache)) return { weekly: null, modelScoped: [] }
+  return { weekly: toStoredWeekly(cache.weekly), modelScoped: toStoredEntries(cache.data) }
 }
 
 // キャッシュに保存済みのエントリを読み戻す (API 応答とは形が違うため別に扱う)
@@ -238,23 +255,10 @@ export async function refreshModelUsage(
   })
 }
 
-// キャッシュの 7d 全体を読む (無い・古すぎる場合は null)
-export function readCachedWeekly(path = usageCachePath()): WeeklyBucket | null {
-  const cache = readCache(path)
-  if (!isFresh(cache)) return null
-  const w = obj(cache.weekly)
-  if (!w) return null
-  const percent = num(w.used_percentage)
-  const resets = num(w.resets_at)
-  if (percent === null || resets === null) return null
-  return { used_percentage: percent, resets_at: resets }
-}
-
-// rate_limits.seven_day をキャッシュの週次値へ差し替える
+// rate_limits.seven_day を与えられた週次値へ差し替える
 // 括弧内のモデル別枠と同じ取得時点の値を並べるためである
-// キャッシュに週次の値が無い または古すぎる場合は元の data をそのまま返す
-export function withCachedWeekly(data: J, path = usageCachePath()): J {
-  const weekly = readCachedWeekly(path)
+// 週次の値が無ければ元の data をそのまま返す
+export function withCachedWeekly(data: J, weekly: WeeklyBucket | null): J {
   const rl = obj(data.rate_limits)
   if (weekly === null || rl === null) return data
   return { ...data, rate_limits: { ...rl, seven_day: weekly } }

@@ -98,9 +98,10 @@ const WEEKLY_ALL = {
 test('fetchUsageSnapshot は weekly_all を 7d 全体として取り出す', async () => {
   const body = { limits: [WEEKLY_ALL, WEEKLY_SCOPED] }
   const snap = await withFetch(jsonResponse(body), () => fetchUsageSnapshot('tok'))
+  // 1787453999 = 2026-08-23T02:59:59Z (プロダクションと同じ変換で導出しないためリテラルで書く)
   expect(snap?.weekly).toEqual({
     used_percentage: 51,
-    resets_at: Date.parse('2026-08-23T02:59:59+00:00') / 1000,
+    resets_at: 1787453999,
   })
   expect(snap?.modelScoped).toHaveLength(1)
 })
@@ -130,8 +131,23 @@ test('fetchUsageSnapshot は weekly_scoped のモデル別枠だけを射影す�
     {
       display_name: 'Fable',
       percent: 88,
-      resets_at: Date.parse('2026-08-23T02:59:59+00:00') / 1000,
+      resets_at: 1787453999,
     },
+  ])
+})
+
+test('fetchUsageSnapshot は複数の weekly_scoped を全て射影する', async () => {
+  const second = {
+    kind: 'weekly_scoped',
+    percent: 12,
+    resets_at: null,
+    scope: { model: { id: null, display_name: 'Sonnet' }, surface: null },
+  }
+  const body = { limits: [WEEKLY_SCOPED, second] }
+  const got = await withFetch(jsonResponse(body), () => fetchEntries('tok'))
+  expect(got).toEqual([
+    { display_name: 'Fable', percent: 88, resets_at: 1787453999 },
+    { display_name: 'Sonnet', percent: 12, resets_at: null },
   ])
 })
 

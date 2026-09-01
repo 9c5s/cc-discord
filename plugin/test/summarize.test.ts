@@ -47,6 +47,13 @@ test('toolSummary は1800字を超える bash を1800字で切り捨て…を付
   expect(toolSummary('Bash', { command: long })).toBe('`⚙️[Bash]`\n```bash\n' + long.slice(0, 1800) + '…\n```')
 })
 
+test('toolSummary は description 併記で1900を超える場合に command を短縮する', () => {
+  // ヘッダー 211 (⚙️は2コードポイント) + 改行 1 + ブロック装飾 12 + command 1675 + … 1 = 1900
+  const result = toolSummary('Bash', { command: 'x'.repeat(1800), description: 'あ'.repeat(200) })
+  expect(result).toBe('`⚙️[Bash] ' + 'あ'.repeat(200) + '`\n```bash\n' + 'x'.repeat(1675) + '…\n```')
+  expect([...result].length).toBe(1900)
+})
+
 test('toolSummary は1800字以下の bash を省略しない', () => {
   const long = 'echo ' + 'x'.repeat(495)
   expect(toolSummary('Bash', { command: long })).toBe('`⚙️[Bash]`\n```bash\n' + long + '\n```')

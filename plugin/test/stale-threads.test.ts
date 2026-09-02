@@ -175,8 +175,8 @@ test('archiveStaleThreads は取得に失敗したら何もしない', async () 
   expect(a.archived).toEqual([])
 })
 
-test('archiveStaleThreads は宛先の削除に失敗しても archive を続ける', async () => {
+test('archiveStaleThreads は担当名が不正なら何もしない', async () => {
   const a = fakeApi([thread()])
-  await archiveStaleThreads(a.api, { ...args, owner: '../evil' })
-  expect(a.archived).toEqual(['44444444444444444'])
+  expect(await archiveStaleThreads(a.api, { ...args, owner: '../evil' })).toEqual([])
+  expect(a.archived).toEqual([])
 })

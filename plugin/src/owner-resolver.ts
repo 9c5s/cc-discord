@@ -15,6 +15,10 @@ import { resolveOwnerChannel, type GuildChannels } from './routing'
 // route ファイルの更新と削除は成功するまで再試行するが 安全性はそれに依存しない
 // (進捗送信も inbound も 実体を見る gate と メモリ上の担当で止まる)
 
+// 解決に成功しないまま担当を保ち続ける上限
+// REST の一時障害では据え置き 障害が続く間は担当を手放して配送も進捗も止める (fail closed)
+const RESOLVE_GRACE_MS = 5 * 60_000
+
 export type OwnerResolver = {
   channelId(): string | null
   guildId(): string | null
@@ -33,6 +37,8 @@ export function createOwnerResolver(deps: {
 
   let channelId: string | null = null
   let guildId: string | null = null
+  // 最後に担当を解決しきれた時刻 (取得失敗が続いたときの打ち切りに使う)
+  let lastSuccessAt: number | null = null
   // ファイルへの反映が失敗した周期を覚え 担当が変わらなくても次の周期で書き直す
   let unapplied = false
   let running = false
@@ -85,6 +91,15 @@ export function createOwnerResolver(deps: {
     applyFiles(next, previous !== null && previous !== next)
   }
 
+  // 取得に失敗した周期の後始末
+  // 猶予の内は前回の担当を据え置き 超えたら手放す
+  const giveUpIfStale = (): void => {
+    if (channelId === null) return
+    if (lastSuccessAt !== null && now() - lastSuccessAt <= RESOLVE_GRACE_MS) return
+    log('[resolver] dropping the owner channel: the resolution keeps failing')
+    setOwned(null, null)
+  }
+
   const resolve = async (): Promise<void> => {
     if (running) return
     running = true
@@ -100,6 +115,7 @@ export function createOwnerResolver(deps: {
       const guilds = await deps.api.getGuilds()
       if (!guilds.ok) {
         log(`[resolver] failed to list guilds: ${guilds.error}`)
+        giveUpIfStale()
         return
       }
       const entries: GuildChannels[] = []
@@ -107,11 +123,13 @@ export function createOwnerResolver(deps: {
         const channels = await deps.api.getGuildChannels(g.id)
         if (!channels.ok) {
           log(`[resolver] failed to list channels of ${g.id}: ${channels.error}`)
+          giveUpIfStale()
           return
         }
         entries.push({ guildId: g.id, channels: channels.value })
       }
 
+      lastSuccessAt = now()
       const resolution = resolveOwnerChannel(entries, access.groups, deps.owner)
       if (resolution.kind === 'resolved') {
         setOwned(resolution.channelId, resolution.guildId)

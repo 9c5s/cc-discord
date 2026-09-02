@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { readFileSync, existsSync, mkdirSync, appendFileSync } from 'fs'
-import { ownerFromDir } from './normalize'
+import { ownerContext } from './routing'
 import { readRoute, stateDir } from './routes'
 
 const API = 'https://discord.com/api/v10'
@@ -37,9 +37,12 @@ export function botToken(): string | null {
   }
 }
 
-// CLAUDE_PROJECT_DIR のベース名を正規化した所有者名を返す
+// 担当ディレクトリのベース名を正規化した所有者名を返す
+// 担当ディレクトリの決定 (CC_DISCORD_PROJECT_DIR の優先) は routing.ts に集約する
+// 担当なしと broken はどちらも空文字になり 呼び出し側は従来どおり空文字で判定する
 export function ownerName(): string {
-  return ownerFromDir(process.env.CLAUDE_PROJECT_DIR ?? '')
+  const ctx = ownerContext()
+  return ctx.kind === 'named' ? ctx.owner : ''
 }
 
 // 担当チャンネル ID を routes から解決する

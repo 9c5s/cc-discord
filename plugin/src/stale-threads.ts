@@ -1,25 +1,17 @@
 import type { DiscordClient } from './discord-api'
-import { isOwnerName, isSnowflake } from './ids'
-import { deleteProgressBody, deleteTarget, listTargets, readProgressBody } from './progress-target'
+import { isOwnerName, isSnowflake, snowflakeTime } from './ids'
+import { deleteProgressBody, deleteTarget, isActiveFor, listTargets, readProgressBody } from './progress-target'
 
 // 滞留した進捗スレッドの archive ---
 // 進捗スレッドは自動 archive を 60 分にして作るが 投稿が続く限り開いたままになる
 // 12 時間動きの無いものを閉じ notify が archived スレッドへ投稿して開き直すのを防ぐ
 
-// Discord snowflake の基準時刻
-const DISCORD_EPOCH = 1_420_070_400_000
 // 動きが無いとみなすまでの時間 (宛先の有効期間と同じ閾値)
 const STALE_MS = 12 * 60 * 60 * 1000
 // 進捗スレッドの名前 (summarize.threadName が付ける先頭の日時)
 const THREAD_NAME_RE = /^\[\d{2}\/\d{2} \d{2}:\d{2}\]/
 
 type Thread = Record<string, unknown>
-
-// snowflake から生成時刻を復元する
-export function snowflakeTime(id: unknown): number | null {
-  if (!isSnowflake(id)) return null
-  return Number(BigInt(id) >> 22n) + DISCORD_EPOCH
-}
 
 // スレッドの最終活動時刻を求める
 // 最終メッセージ 作成時刻 スレッド id の順に見る
@@ -70,11 +62,14 @@ export async function archiveStaleThreads(
     const id = thread.id
     if (!isSnowflake(id)) continue
 
+    // まだ有効な宛先が残っているスレッドは閉じない
+    // 宛先はスレッドを作った直後に書かれるため 閉じる条件を満たした時点でも失効しきっていないことがある
+    const targets = listTargets(args.owner).filter((e) => e.target.id === id)
+    if (targets.some((e) => isActiveFor(e.target, e.activationId, now))) continue
+
     // 閉じる前に この スレッドを指す宛先だけを取り除く
     let released = true
-    for (const entry of listTargets(args.owner)) {
-      if (entry.target.id === id) released = deleteTarget(args.owner, entry.activationId) && released
-    }
+    for (const entry of targets) released = deleteTarget(args.owner, entry.activationId) && released
     if (readProgressBody(args.owner) === id) released = deleteProgressBody(args.owner) && released
     if (!released) continue
 

@@ -9,6 +9,16 @@ export function isSnowflake(v: unknown): v is string {
   return typeof v === 'string' && /^\d{17,20}$/.test(v)
 }
 
+// Discord snowflake の基準時刻
+const DISCORD_EPOCH = 1_420_070_400_000
+
+// snowflake から生成時刻を復元する
+// 形式が不正な値では null を返す
+export function snowflakeTime(id: unknown): number | null {
+  if (!isSnowflake(id)) return null
+  return Number(BigInt(id) >> 22n) + DISCORD_EPOCH
+}
+
 // Claude Code の session_id (小文字 16 進の UUID 形式)
 export function isSessionId(v: unknown): v is string {
   return typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)

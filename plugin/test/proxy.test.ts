@@ -172,7 +172,7 @@ function harness(over: Record<string, unknown> = {}): Harness {
     toChild: writer(toChild),
     footer: () => (over.footer as string) ?? '',
     log: (m: string) => void logs.push(m),
-    now: () => NOW,
+    now: (over.now as (() => number) | undefined) ?? (() => NOW),
     sleep: async () => {},
   }
   return { ctx, toClient, toChild, posted, typingStarted, typingStopped, logs }
@@ -471,4 +471,23 @@ test('handleClientMessage は id を持たない担当外の tools/call を捨�
   await handleClientMessage(msg, raw(msg), h.ctx)
   expect(h.toChild).toEqual([])
   expect(h.toClient).toEqual([])
+})
+
+test('handleServerMessage は実体の取得を待つ間に鮮度が切れた通知を配送しない', async () => {
+  writePointer(pointer())
+  let clock = NOW
+  const h = harness({
+    now: () => clock,
+    api: {
+      getChannel: async (id: string) => {
+        // 取得に長く待たされ その間にロックの回収が起きた状況を作る
+        clock = NOW + 13 * 60 * 60 * 1000
+        return { ok: true as const, value: { id, type: 0 } }
+      },
+    },
+  })
+  const msg = notification()
+  await handleServerMessage(msg, raw(msg), h.ctx)
+  expect(h.toClient).toEqual([])
+  expect(h.typingStarted).toEqual([])
 })

@@ -73,7 +73,7 @@ export function resolveOwnerChannel(
 // DM を担当するのはこの名前のセッションだけである (guild の担当解決には依存しない)
 const DM_OWNER = 'cc-discord'
 // DM のチャンネル種別
-const DM = 1
+export const DM_CHANNEL = 1
 // スレッドのチャンネル種別 (announcement / public / private)
 const THREAD_TYPES = new Set([10, 11, 12])
 
@@ -125,7 +125,7 @@ export function decideDelivery(input: {
   if (!entity) return { action: 'drop', reason: 'CHANNEL_FETCH_FAILED' }
   if (entity.id !== chatId) return { action: 'drop', reason: 'CHANNEL_ID_MISMATCH' }
 
-  if (entity.type === DM) {
+  if (entity.type === DM_CHANNEL) {
     if (owner !== DM_OWNER) return { action: 'drop', reason: 'NOT_DM_OWNER' }
     return { action: 'handle', kind: 'dm', parentId: chatId }
   }

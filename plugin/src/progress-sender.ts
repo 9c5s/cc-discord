@@ -1,9 +1,8 @@
 import type { Access } from './access'
 import { HEARTBEAT_TTL_MS, isFresh, readHeartbeat, readPointer } from './activation'
 import type { DiscordClient } from './discord-api'
-import { isSnowflake } from './ids'
 import { isActiveFor, readTarget } from './progress-target'
-import { isThread, resolveOwnerChannel, type ChannelEntity } from './routing'
+import { DM_CHANNEL, decideDelivery, resolveOwnerChannel, type ChannelEntity } from './routing'
 
 // 進捗の送信 ---
 // 送信のたびに activation の確認と outbound gate を通す
@@ -70,26 +69,23 @@ export function createProgressSender(deps: SenderDeps): { send(text: string): Pr
   }
 
   // outbound gate
-  // DM は実際の相手が allowFrom にあること guild は親が現在の担当と一致することを要求する
+  // 宛先の実体を取り inbound と同じ決定関数で担当のものかを確かめる
+  // DM は担当名 (cc-discord) で決まり さらに実際の相手が allowFrom にあることを要求する
+  // guild は親 (スレッドなら parent_id) が現在の担当と一致することを要求する
   const passesGate = async (targetId: string): Promise<boolean> => {
     const access = deps.access()
     const entity = await fetchEntity(targetId)
     if (!entity) return false
 
-    if (entity.type === 1) {
+    // 担当チャンネルの解決は guild の宛先にだけ要る (DM は担当解決に依存しない)
+    const ownerChannelId = entity.type === DM_CHANNEL ? null : await resolveOwned(access)
+    const decision = decideDelivery({ owner: deps.owner, ownerChannelId, chatId: targetId, entity })
+    if (decision.action === 'drop') return false
+    if (decision.kind === 'dm') {
       const recipient = entity.recipients?.[0]?.id
       return typeof recipient === 'string' && access.allowFrom.includes(recipient)
     }
-
-    let parentId = targetId
-    if (isThread(entity)) {
-      if (!isSnowflake(entity.parent_id)) return false
-      const parent = await fetchEntity(entity.parent_id)
-      if (!parent) return false
-      parentId = entity.parent_id
-    }
-    const owned = await resolveOwned(access)
-    return owned !== null && owned === parentId
+    return true
   }
 
   const send = async (text: string): Promise<SendOutcome> => {

@@ -232,3 +232,26 @@ test('通信例外は失敗として扱う', async () => {
   expect(res.ok).toBe(false)
   expect(res.ok === false && res.error).toContain('network down')
 })
+
+test('429 の本文に retry_after が無ければ Retry-After ヘッダを使う', async () => {
+  const waits: number[] = []
+  const { api } = client(
+    [
+      { status: 429, json: { message: 'rate limited' }, headers: { 'Retry-After': '3' } },
+      { json: { id: CH, type: 0 } },
+    ],
+    { sleep: async (ms: number) => void waits.push(ms) },
+  )
+  await api.getChannel(CH)
+  expect(waits).toEqual([3000])
+})
+
+test('429 の本文もヘッダも読めなければ 1 秒として扱う', async () => {
+  const waits: number[] = []
+  const { api } = client(
+    [{ status: 429, json: { message: 'rate limited' } }, { json: { id: CH, type: 0 } }],
+    { sleep: async (ms: number) => void waits.push(ms) },
+  )
+  await api.getChannel(CH)
+  expect(waits).toEqual([1000])
+})

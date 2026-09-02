@@ -11,6 +11,7 @@ import {
   createProgressTarget,
   createTypingController,
   sweepInboundLocks,
+  type TargetLocation,
   type TypingController,
 } from './inbound'
 import { isSnowflake } from './ids'
@@ -177,19 +178,37 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
   }
 
   // ここから先は best effort である (失敗しても通知は転送する)
+  // 待ちを伴う準備 (スレッドの作成と activation の解決) だけを先に済ませ ファイルにはまだ書かない
+  let location: TargetLocation | null = null
+  let activation: { sessionId: string; activationId: string } | null = null
   try {
     ctx.typing.start(chatId)
     const content = typeof params.content === 'string' ? params.content : ''
-    const location = await createProgressTarget(ctx.api, {
+    location = await createProgressTarget(ctx.api, {
       chatId,
       kind: delivery.kind,
       parentId: delivery.parentId,
       content,
       ts: new Date(),
     })
-    writeProgressBody(owner, location.id)
+    activation = await resolveActivation(ctx)
+  } catch (e) {
+    ctx.log(`inbound side effects failed: ${e}`)
+  }
 
-    const activation = await resolveActivation(ctx)
+  // 配送の直前にもう一度確かめる (宛先の作成と activation の解決で時間が過ぎることがある)
+  // ここで落とす場合は この通知のために始めた typing も止める
+  const relayFreshness = inboundFreshness(messageId, (ctx.now ?? Date.now)())
+  if (relayFreshness !== 'fresh') {
+    ctx.log(`inbound dropped before relaying: ${relayFreshness} message=${messageId}`)
+    ctx.typing.stop(chatId)
+    return
+  }
+
+  // 宛先の公開と配送は待ちを挟まずに続けて行う
+  // 途中で止まっても 配送されない通知の宛先を watcher に見せない
+  if (location) {
+    writeProgressBody(owner, location.id)
     if (activation) {
       writeTarget(owner, {
         ...location,
@@ -202,20 +221,6 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
     } else {
       ctx.log('no current activation: the progress target was not written')
     }
-  } catch (e) {
-    ctx.log(`inbound side effects failed: ${e}`)
-  }
-
-  // 配送の直前にもう一度確かめる (宛先の作成と activation の解決で時間が過ぎることがある)
-  // ここで落とす場合は この通知のために始めた typing と書いた宛先も戻す
-  const relayFreshness = inboundFreshness(messageId, (ctx.now ?? Date.now)())
-  if (relayFreshness !== 'fresh') {
-    ctx.log(`inbound dropped before relaying: ${relayFreshness} message=${messageId}`)
-    ctx.typing.stop(chatId)
-    for (const entry of listTargets(owner)) {
-      if (entry.target.message_id === messageId) deleteTarget(owner, entry.activationId)
-    }
-    return
   }
 
   ctx.toClient.write(raw)

@@ -511,4 +511,5 @@ test('handleServerMessage は宛先を作る間に鮮度が切れたら配送も
   expect(h.toClient).toEqual([])
   expect(h.typingStopped).toEqual([CH])
   expect(listTargets(OWNER)).toEqual([])
+  expect(readProgressBody(OWNER)).toBe(null)
 })

@@ -77,6 +77,12 @@ const DM = 1
 // スレッドのチャンネル種別 (announcement / public / private)
 const THREAD_TYPES = new Set([10, 11, 12])
 
+// 実体がスレッドかどうかを判定する
+// GuildText の parent_id は所属カテゴリを指すため 親を辿るのはスレッドのときだけである
+export function isThread(entity: ChannelEntity): boolean {
+  return THREAD_TYPES.has(entity.type as number)
+}
+
 export type InboundMeta = { chat_id?: unknown; message_id?: unknown }
 
 export type InboundClass =
@@ -92,7 +98,14 @@ export function classifyInbound(ctx: OwnerContext, meta: InboundMeta): InboundCl
   return { action: 'inspect', owner: ctx.owner, chatId: meta.chat_id, messageId: meta.message_id }
 }
 
-export type ChannelEntity = { id?: unknown; type?: unknown; parent_id?: unknown; guild_id?: unknown }
+// GET /channels/{id} の応答のうち判定に使う部分
+export type ChannelEntity = {
+  id?: unknown
+  type?: unknown
+  parent_id?: unknown
+  guild_id?: unknown
+  recipients?: Array<{ id?: unknown }>
+}
 
 export type DeliveryDecision =
   | { action: 'handle'; kind: 'guild' | 'dm'; parentId: string }
@@ -118,7 +131,7 @@ export function decideDelivery(input: {
   }
 
   if (!ownerChannelId) return { action: 'drop', reason: 'NO_OWNER_CHANNEL' }
-  const parentId = THREAD_TYPES.has(entity.type as number)
+  const parentId = isThread(entity)
     ? (isSnowflake(entity.parent_id) ? entity.parent_id : null)
     : chatId
   if (parentId !== ownerChannelId) return { action: 'drop', reason: 'NOT_OWNED' }

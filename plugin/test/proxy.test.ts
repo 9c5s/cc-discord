@@ -3,13 +3,14 @@ import { mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import {
+  cleanupRun,
   createInitializeRewriter,
   handleClientMessage,
   handleServerMessage,
   type ProxyContext,
 } from '../src/proxy'
-import { writeHeartbeat, writePointer, type Pointer } from '../src/activation'
-import { listTargets, readProgressBody, readTarget } from '../src/progress-target'
+import { readHeartbeat, readPointer, writeHeartbeat, writePointer, type Pointer } from '../src/activation'
+import { listTargets, readProgressBody, readTarget, writeTarget } from '../src/progress-target'
 import type { ApiResult, DiscordClient } from '../src/discord-api'
 import type { Access } from '../src/access'
 import type { Json, Writer } from '../src/relay'
@@ -352,4 +353,52 @@ test('handleClientMessage は initialize を記録して子へ転送する', () 
   const msg: Json = { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }
   handleClientMessage(msg, raw(msg), h.ctx)
   expect(h.toChild).toEqual([raw(msg)])
+})
+
+// --- 終了処理 ---
+
+const OTHER_RUN = 'd'.repeat(32)
+
+function target(activationId: string, runId: string): Parameters<typeof writeTarget>[1] {
+  return {
+    id: THREAD,
+    parent: CH,
+    kind: 'guild',
+    session_id: SESSION,
+    run_id: runId,
+    activation_id: activationId,
+    message_id: MSG,
+    written_at: NOW,
+  }
+}
+
+test('cleanupRun は自分の run の heartbeat とポインタと宛先を消す', () => {
+  writeHeartbeat(PID, RUN, NOW)
+  writePointer(pointer())
+  writeTarget(OWNER, target(ACT, RUN))
+  cleanupRun({ claudePid: PID, runId: RUN, owner: OWNER })
+  expect(readHeartbeat(PID, RUN)).toBe(null)
+  expect(readPointer(PID)).toBe(null)
+  expect(readTarget(OWNER, ACT)).toBe(null)
+})
+
+test('cleanupRun は他の run のポインタを消さない', () => {
+  writePointer(pointer({ run_id: OTHER_RUN }))
+  cleanupRun({ claudePid: PID, runId: RUN, owner: OWNER })
+  expect(readPointer(PID)?.run_id).toBe(OTHER_RUN)
+})
+
+test('cleanupRun は他の run の宛先を消さない', () => {
+  const otherAct = 'e'.repeat(32)
+  writeTarget(OWNER, target(otherAct, OTHER_RUN))
+  cleanupRun({ claudePid: PID, runId: RUN, owner: OWNER })
+  expect(readTarget(OWNER, otherAct)).not.toBe(null)
+})
+
+test('cleanupRun は run_id を持たない起動では何もしない', () => {
+  writePointer(pointer({ run_id: null }))
+  writeTarget(OWNER, target(ACT, RUN))
+  cleanupRun({ claudePid: PID, runId: null, owner: OWNER })
+  expect(readPointer(PID)).not.toBe(null)
+  expect(readTarget(OWNER, ACT)).not.toBe(null)
 })

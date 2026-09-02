@@ -233,6 +233,19 @@ export function handleClientMessage(msg: Json, raw: string, ctx: ProxyContext): 
   })
 }
 
+// 終了時の後片付け ---
+// 自分の run のものだけを消す (他の起動や他のセッションの状態には触れない)
+// 異常終了で残っても heartbeat は 15 秒 宛先は 12 時間で失効し ポインタは次の SessionStart の掃除で消える
+export function cleanupRun(args: { claudePid: number; runId: string | null; owner: string }): void {
+  if (!args.runId) return
+  deleteHeartbeat(args.claudePid, args.runId)
+  if (readPointer(args.claudePid)?.run_id === args.runId) deletePointer(args.claudePid)
+  if (!args.owner) return
+  for (const entry of listTargets(args.owner)) {
+    if (entry.target.run_id === args.runId) deleteTarget(args.owner, entry.activationId)
+  }
+}
+
 // 配線 ---
 
 function main(): void {
@@ -371,14 +384,7 @@ function main(): void {
     if (heartbeatTimer) clearInterval(heartbeatTimer)
     clearInterval(resolveTimer)
     clearInterval(archiveTimer)
-    if (!runId) return
-    // 自分の run のものだけを片付ける (異常終了で残っても heartbeat は 15 秒 宛先は 12 時間で失効する)
-    deleteHeartbeat(claudePid, runId)
-    if (readPointer(claudePid)?.run_id === runId) deletePointer(claudePid)
-    if (!owner) return
-    for (const entry of listTargets(owner)) {
-      if (entry.target.run_id === runId) deleteTarget(owner, entry.activationId)
-    }
+    cleanupRun({ claudePid, runId, owner })
   }
 
   let shuttingDown = false

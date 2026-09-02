@@ -123,6 +123,33 @@ const WEEKLY_ALL = {
   scope: null,
 }
 
+const SESSION_LIMIT = {
+  kind: 'session',
+  group: 'session',
+  percent: 63,
+  resets_at: '2026-08-23T06:00:00+00:00',
+  scope: null,
+}
+
+test('fetchUsageSnapshot は session を 5h として取り出す', async () => {
+  const body = { limits: [SESSION_LIMIT, WEEKLY_ALL, WEEKLY_SCOPED] }
+  const snap = await withFetch(jsonResponse(body), () => fetchUsageSnapshot('tok'))
+  // 1787464800 = 2026-08-23T06:00:00Z (プロダクションと同じ変換で導出しないためリテラルで書く)
+  expect(snap?.session).toEqual({ used_percentage: 63, resets_at: 1787464800 })
+})
+
+test('fetchUsageSnapshot は session が無ければ 5h を null にする', async () => {
+  const body = { limits: [WEEKLY_ALL] }
+  const snap = await withFetch(jsonResponse(body), () => fetchUsageSnapshot('tok'))
+  expect(snap?.session).toBeNull()
+})
+
+test('fetchUsageSnapshot はリセット時刻の無い session を採用しない', async () => {
+  const body = { limits: [{ ...SESSION_LIMIT, resets_at: null }] }
+  const snap = await withFetch(jsonResponse(body), () => fetchUsageSnapshot('tok'))
+  expect(snap?.session).toBeNull()
+})
+
 test('fetchUsageSnapshot は weekly_all を 7d 全体として取り出す', async () => {
   const body = { limits: [WEEKLY_ALL, WEEKLY_SCOPED] }
   const snap = await withFetch(jsonResponse(body), () => fetchUsageSnapshot('tok'))
@@ -232,20 +259,32 @@ test('fetchUsageSnapshot は通信例外でも null を返す', async () => {
 const FABLE_ENTRY = { display_name: 'Fable', percent: 88, resets_at: 123 }
 const WEEKLY_STORED = { used_percentage: 51, resets_at: 1787454000 }
 
-test('readCachedUsage は 7d 全体とモデル別枠を1回の読み取りで返す', () => {
+const SESSION_STORED = { used_percentage: 63, resets_at: 1787464800 }
+
+test('readCachedUsage は 5h と 7d 全体とモデル別枠を1回の読み取りで返す', () => {
   const p = tmpFile('cache.json')
-  writeJson(p, { _cached_at: nowSec(), data: [FABLE_ENTRY], weekly: WEEKLY_STORED })
-  expect(readCachedUsage(p)).toEqual({ weekly: WEEKLY_STORED, modelScoped: [FABLE_ENTRY] })
+  writeJson(p, { _cached_at: nowSec(), data: [FABLE_ENTRY], weekly: WEEKLY_STORED, session: SESSION_STORED })
+  expect(readCachedUsage(p)).toEqual({
+    weekly: WEEKLY_STORED,
+    session: SESSION_STORED,
+    modelScoped: [FABLE_ENTRY],
+  })
+})
+
+test('readCachedUsage は session の値が不正なら null にする', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { _cached_at: nowSec(), session: { used_percentage: null, resets_at: 1 } })
+  expect(readCachedUsage(p).session).toBeNull()
 })
 
 test('readCachedUsage はキャッシュが無ければ空の組を返す', () => {
-  expect(readCachedUsage(tmpFile('absent.json'))).toEqual({ weekly: null, modelScoped: [] })
+  expect(readCachedUsage(tmpFile('absent.json'))).toEqual({ weekly: null, session: null, modelScoped: [] })
 })
 
 test('readCachedUsage は壊れた JSON でも空の組を返す', () => {
   const p = tmpFile('cache.json')
   writeFileSync(p, '{invalid')
-  expect(readCachedUsage(p)).toEqual({ weekly: null, modelScoped: [] })
+  expect(readCachedUsage(p)).toEqual({ weekly: null, session: null, modelScoped: [] })
 })
 
 test('readCachedUsage は percent が数値でない要素を除外する', () => {
@@ -262,14 +301,14 @@ test('readCachedUsage は weekly の値が不正なら null にする', () => {
 
 test('readCachedUsage は取得時刻の無いキャッシュを使わない', () => {
   const p = tmpFile('cache.json')
-  writeJson(p, { data: [FABLE_ENTRY], weekly: WEEKLY_STORED })
-  expect(readCachedUsage(p)).toEqual({ weekly: null, modelScoped: [] })
+  writeJson(p, { data: [FABLE_ENTRY], weekly: WEEKLY_STORED, session: SESSION_STORED })
+  expect(readCachedUsage(p)).toEqual({ weekly: null, session: null, modelScoped: [] })
 })
 
-test('readCachedUsage は STALE_SEC を超えて古いキャッシュを両方とも捨てる', () => {
+test('readCachedUsage は STALE_SEC を超えて古いキャッシュをすべて捨てる', () => {
   const p = tmpFile('cache.json')
-  writeJson(p, { _cached_at: nowSec() - 901, data: [FABLE_ENTRY], weekly: WEEKLY_STORED })
-  expect(readCachedUsage(p)).toEqual({ weekly: null, modelScoped: [] })
+  writeJson(p, { _cached_at: nowSec() - 901, data: [FABLE_ENTRY], weekly: WEEKLY_STORED, session: SESSION_STORED })
+  expect(readCachedUsage(p)).toEqual({ weekly: null, session: null, modelScoped: [] })
 })
 
 // --- refreshModelUsage ---
@@ -320,6 +359,26 @@ test('ensureFresh は TTL 切れなら更新を起動する', () => {
     spawned = true
   })
   expect(spawned).toBe(true)
+})
+
+test('ensureFresh は 60 秒より古いキャッシュで更新を起動する', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { _cached_at: nowSec() - 61, _attempted_at: 0, data: [] })
+  let spawned = false
+  ensureFresh(p, () => {
+    spawned = true
+  })
+  expect(spawned).toBe(true)
+})
+
+test('ensureFresh は 60 秒以内のキャッシュでは起動しない', () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { _cached_at: nowSec() - 59, _attempted_at: 0, data: [] })
+  let spawned = false
+  ensureFresh(p, () => {
+    spawned = true
+  })
+  expect(spawned).toBe(false)
 })
 
 test('ensureFresh は直近に試行済みなら起動しない', () => {

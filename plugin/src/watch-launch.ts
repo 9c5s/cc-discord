@@ -1,28 +1,8 @@
-// SessionStart hook. stdin の JSON から transcript_path を取り出し watch.ts を background 起動する
-import { spawn } from 'child_process'
-import { join } from 'path'
+// 互換 shim
+// global settings.json の SessionStart hook が指す symlink の参照先である
+// watcher の起動はプラグインの hooks (session-start.ts) が担うようになったため ここでは何もしない
+// global 側と二重に発火して watcher が 2 本になるのを防ぐための空実装である
+// 移行手順で global の hook 登録と symlink を外した後 次のリリースでこのファイルを削除する
 
-const raw = await new Response(Bun.stdin.stream()).text()
-let tp = ''
-try {
-  const payload = JSON.parse(raw) as Record<string, unknown>
-  // 文字列以外 (object や number) が来ても spawn に渡さないよう型を検証する
-  tp = typeof payload.transcript_path === 'string' ? payload.transcript_path : ''
-  if (!tp) {
-    // transcript_path が取れない場合は stderr に診断を出す
-    // hook プロセスの stderr は Claude Code 側で観測可能である
-    process.stderr.write('[watch-launch] transcript_path not found in hook payload\n')
-  }
-} catch (e) {
-  process.stderr.write(`[watch-launch] failed to parse hook payload: ${e}\n`)
-}
-if (tp) {
-  // watch.ts は同じ src ディレクトリにある
-  // import.meta.dir で解決する (Windows でも確実)
-  const watch = join(import.meta.dir, 'watch.ts')
-  // process.execPath は現在の bun バイナリのフルパス
-  // Windows で bun の PATH 解決に依存せず確実
-  // windowsHide はセッション開始時に子プロセスのコンソール窓が一瞬出るのを抑止する (Windows 限定で有効)
-  const child = spawn(process.execPath, [watch, tp], { detached: true, stdio: 'ignore', env: process.env, windowsHide: true })
-  child.unref()
-}
+// stdin を読み捨てる (読まずに終了すると呼び出し側の書き込みが失敗しうる)
+await new Response(Bun.stdin.stream()).text()

@@ -2,5 +2,5 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "cc-discord",
   "author": { "name": "9c5s" },
-  "description": "公式 discord channel plugin を無改変のまま透過プロキシで拡張する (spike 段階)"
+  "description": "公式 discord channel plugin を無改変のまま透過プロキシで拡張する"
 }

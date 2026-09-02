@@ -68,8 +68,8 @@ test('ownerName: CLAUDE_PROJECT_DIR 未設定なら空文字を返す', () => {
 
 test('ownerName: CC_DISCORD_PROJECT_DIR があれば CLAUDE_PROJECT_DIR より優先する', () => {
   process.env.CLAUDE_PROJECT_DIR = 'C:\\example\\spike'
-  process.env.CC_DISCORD_PROJECT_DIR = 'C:\\example\\eagle'
-  expect(ownerName()).toBe('eagle')
+  process.env.CC_DISCORD_PROJECT_DIR = 'C:\\example\\proj'
+  expect(ownerName()).toBe('proj')
 })
 
 test('ownerName: 正規化名が空になるディレクトリでは空文字を返す', () => {

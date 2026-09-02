@@ -10,10 +10,10 @@ function guild(guildId: string, channels: Array<{ id: string; name: string; type
 
 test('resolveOwnerChannel は候補が 1 件なら担当として解決する', () => {
   const guilds = [guild('11111111111111111', [
-    { id: '22222222222222222', name: 'eagle' },
+    { id: '22222222222222222', name: 'proj' },
     { id: '33333333333333333', name: 'general' },
   ])]
-  expect(resolveOwnerChannel(guilds, { '22222222222222222': {} }, 'eagle')).toEqual({
+  expect(resolveOwnerChannel(guilds, { '22222222222222222': {} }, 'proj')).toEqual({
     kind: 'resolved',
     channelId: '22222222222222222',
     guildId: '11111111111111111',
@@ -22,15 +22,15 @@ test('resolveOwnerChannel は候補が 1 件なら担当として解決する', 
 
 test('resolveOwnerChannel は候補が 0 件なら未解決を返す', () => {
   const guilds = [guild('11111111111111111', [{ id: '33333333333333333', name: 'general' }])]
-  expect(resolveOwnerChannel(guilds, { '33333333333333333': {} }, 'eagle')).toEqual({ kind: 'unresolved' })
+  expect(resolveOwnerChannel(guilds, { '33333333333333333': {} }, 'proj')).toEqual({ kind: 'unresolved' })
 })
 
 test('resolveOwnerChannel は同一 guild 内に同名の候補が 2 件あれば曖昧を返す', () => {
   const guilds = [guild('11111111111111111', [
-    { id: '22222222222222222', name: 'eagle' },
-    { id: '44444444444444444', name: 'Eagle' },
+    { id: '22222222222222222', name: 'proj' },
+    { id: '44444444444444444', name: 'Proj' },
   ])]
-  expect(resolveOwnerChannel(guilds, { '22222222222222222': {}, '44444444444444444': {} }, 'eagle')).toEqual({
+  expect(resolveOwnerChannel(guilds, { '22222222222222222': {}, '44444444444444444': {} }, 'proj')).toEqual({
     kind: 'ambiguous',
     channelIds: ['22222222222222222', '44444444444444444'],
   })
@@ -38,10 +38,10 @@ test('resolveOwnerChannel は同一 guild 内に同名の候補が 2 件あれ�
 
 test('resolveOwnerChannel は別の guild に同名の候補があれば曖昧を返す', () => {
   const guilds = [
-    guild('11111111111111111', [{ id: '22222222222222222', name: 'eagle' }]),
-    guild('55555555555555555', [{ id: '66666666666666666', name: 'eagle' }]),
+    guild('11111111111111111', [{ id: '22222222222222222', name: 'proj' }]),
+    guild('55555555555555555', [{ id: '66666666666666666', name: 'proj' }]),
   ]
-  expect(resolveOwnerChannel(guilds, { '22222222222222222': {}, '66666666666666666': {} }, 'eagle')).toEqual({
+  expect(resolveOwnerChannel(guilds, { '22222222222222222': {}, '66666666666666666': {} }, 'proj')).toEqual({
     kind: 'ambiguous',
     channelIds: ['22222222222222222', '66666666666666666'],
   })
@@ -49,10 +49,10 @@ test('resolveOwnerChannel は別の guild に同名の候補があれば曖昧�
 
 test('resolveOwnerChannel は access.groups に無い同名チャンネルを候補にしない', () => {
   const guilds = [guild('11111111111111111', [
-    { id: '22222222222222222', name: 'eagle' },
-    { id: '44444444444444444', name: 'eagle' },
+    { id: '22222222222222222', name: 'proj' },
+    { id: '44444444444444444', name: 'proj' },
   ])]
-  expect(resolveOwnerChannel(guilds, { '22222222222222222': {} }, 'eagle')).toEqual({
+  expect(resolveOwnerChannel(guilds, { '22222222222222222': {} }, 'proj')).toEqual({
     kind: 'resolved',
     channelId: '22222222222222222',
     guildId: '11111111111111111',
@@ -63,16 +63,16 @@ test('resolveOwnerChannel は GuildText 以外のチャンネルを候補にし�
   const guilds: GuildChannels[] = [{
     guildId: '11111111111111111',
     channels: [
-      { id: '22222222222222222', name: 'eagle', type: 2 },
-      { id: '44444444444444444', name: 'eagle', type: 11 },
+      { id: '22222222222222222', name: 'proj', type: 2 },
+      { id: '44444444444444444', name: 'proj', type: 11 },
     ],
   }]
-  expect(resolveOwnerChannel(guilds, { '22222222222222222': {}, '44444444444444444': {} }, 'eagle')).toEqual({ kind: 'unresolved' })
+  expect(resolveOwnerChannel(guilds, { '22222222222222222': {}, '44444444444444444': {} }, 'proj')).toEqual({ kind: 'unresolved' })
 })
 
 test('resolveOwnerChannel はチャンネル名を正規化して担当名と比較する', () => {
-  const guilds = [guild('11111111111111111', [{ id: '22222222222222222', name: 'My_Eagle Project' }])]
-  expect(resolveOwnerChannel(guilds, { '22222222222222222': {} }, 'my-eagle-project')).toEqual({
+  const guilds = [guild('11111111111111111', [{ id: '22222222222222222', name: 'My_Sample Project' }])]
+  expect(resolveOwnerChannel(guilds, { '22222222222222222': {} }, 'my-sample-project')).toEqual({
     kind: 'resolved',
     channelId: '22222222222222222',
     guildId: '11111111111111111',
@@ -89,22 +89,22 @@ test('resolveOwnerChannel は id や name が欠けたチャンネルを候補�
     guildId: '11111111111111111',
     channels: [
       { id: '22222222222222222', type: 0 },
-      { id: 'not-a-snowflake', name: 'eagle', type: 0 },
+      { id: 'not-a-snowflake', name: 'proj', type: 0 },
     ],
   }]
-  expect(resolveOwnerChannel(guilds, { '22222222222222222': {}, 'not-a-snowflake': {} }, 'eagle')).toEqual({ kind: 'unresolved' })
+  expect(resolveOwnerChannel(guilds, { '22222222222222222': {}, 'not-a-snowflake': {} }, 'proj')).toEqual({ kind: 'unresolved' })
 })
 
 // --- ownerContext ---
 
 test('ownerContext は CC_DISCORD_PROJECT_DIR を CLAUDE_PROJECT_DIR より優先する', () => {
-  expect(ownerContext({ CC_DISCORD_PROJECT_DIR: 'D:\\projects\\eagle', CLAUDE_PROJECT_DIR: 'D:\\projects\\tmp\\spike' }))
-    .toEqual({ kind: 'named', owner: 'eagle', dir: 'D:\\projects\\eagle' })
+  expect(ownerContext({ CC_DISCORD_PROJECT_DIR: 'C:\\example\\proj', CLAUDE_PROJECT_DIR: 'C:\\example\\tmp\\spike' }))
+    .toEqual({ kind: 'named', owner: 'proj', dir: 'C:\\example\\proj' })
 })
 
 test('ownerContext は CLAUDE_PROJECT_DIR のベース名を正規化して担当名にする', () => {
-  expect(ownerContext({ CLAUDE_PROJECT_DIR: 'D:\\projects\\My_Eagle Project\\' }))
-    .toEqual({ kind: 'named', owner: 'my-eagle-project', dir: 'D:\\projects\\My_Eagle Project\\' })
+  expect(ownerContext({ CLAUDE_PROJECT_DIR: 'C:\\example\\My_Sample Project\\' }))
+    .toEqual({ kind: 'named', owner: 'my-sample-project', dir: 'C:\\example\\My_Sample Project\\' })
 })
 
 test('ownerContext はどちらも未設定なら担当なしを返す', () => {
@@ -113,28 +113,28 @@ test('ownerContext はどちらも未設定なら担当なしを返す', () => {
 })
 
 test('ownerContext は正規化名が空になるディレクトリを broken として返す', () => {
-  expect(ownerContext({ CLAUDE_PROJECT_DIR: 'D:\\projects\\---' })).toEqual({ kind: 'broken', dir: 'D:\\projects\\---' })
+  expect(ownerContext({ CLAUDE_PROJECT_DIR: 'C:\\example\\---' })).toEqual({ kind: 'broken', dir: 'C:\\example\\---' })
 })
 
 // --- classifyInbound ---
 
 const CHAT = '22222222222222222'
 const MSG = '99999999999999999'
-const named = { kind: 'named', owner: 'eagle', dir: 'D:\\projects\\eagle' } as const
+const named = { kind: 'named', owner: 'proj', dir: 'C:\\example\\proj' } as const
 
 test('classifyInbound は担当なしのとき通知を素通しする', () => {
   expect(classifyInbound({ kind: 'none' }, { chat_id: CHAT, message_id: MSG })).toEqual({ action: 'passthrough' })
 })
 
 test('classifyInbound は担当名が壊れているとき通知を破棄する', () => {
-  const decision = classifyInbound({ kind: 'broken', dir: 'D:\\projects\\---' }, { chat_id: CHAT, message_id: MSG })
+  const decision = classifyInbound({ kind: 'broken', dir: 'C:\\example\\---' }, { chat_id: CHAT, message_id: MSG })
   expect(decision).toEqual({ action: 'drop', reason: 'ROUTING_BROKEN' })
 })
 
 test('classifyInbound は担当名があり識別子が正しければチャンネル実体の確認を求める', () => {
   expect(classifyInbound(named, { chat_id: CHAT, message_id: MSG })).toEqual({
     action: 'inspect',
-    owner: 'eagle',
+    owner: 'proj',
     chatId: CHAT,
     messageId: MSG,
   })
@@ -153,7 +153,7 @@ const THREAD = '44444444444444444'
 
 test('decideDelivery は担当チャンネル自身への通知を配送する', () => {
   const decision = decideDelivery({
-    owner: 'eagle',
+    owner: 'proj',
     ownerChannelId: OWNER_CH,
     chatId: OWNER_CH,
     entity: { id: OWNER_CH, type: 0 },
@@ -163,7 +163,7 @@ test('decideDelivery は担当チャンネル自身への通知を配送する',
 
 test('decideDelivery は担当チャンネル配下のスレッドへの通知を配送し親を返す', () => {
   const decision = decideDelivery({
-    owner: 'eagle',
+    owner: 'proj',
     ownerChannelId: OWNER_CH,
     chatId: THREAD,
     entity: { id: THREAD, type: 11, parent_id: OWNER_CH },
@@ -173,7 +173,7 @@ test('decideDelivery は担当チャンネル配下のスレッドへの通知�
 
 test('decideDelivery は担当外のチャンネルへの通知を破棄する', () => {
   const decision = decideDelivery({
-    owner: 'eagle',
+    owner: 'proj',
     ownerChannelId: OWNER_CH,
     chatId: '55555555555555555',
     entity: { id: '55555555555555555', type: 0 },
@@ -183,7 +183,7 @@ test('decideDelivery は担当外のチャンネルへの通知を破棄する',
 
 test('decideDelivery は担当外チャンネルのスレッドへの通知を破棄する', () => {
   const decision = decideDelivery({
-    owner: 'eagle',
+    owner: 'proj',
     ownerChannelId: OWNER_CH,
     chatId: THREAD,
     entity: { id: THREAD, type: 11, parent_id: '55555555555555555' },
@@ -193,7 +193,7 @@ test('decideDelivery は担当外チャンネルのスレッドへの通知を�
 
 test('decideDelivery は親を持たないスレッドへの通知を破棄する', () => {
   const decision = decideDelivery({
-    owner: 'eagle',
+    owner: 'proj',
     ownerChannelId: OWNER_CH,
     chatId: THREAD,
     entity: { id: THREAD, type: 11 },
@@ -203,7 +203,7 @@ test('decideDelivery は親を持たないスレッドへの通知を破棄す�
 
 test('decideDelivery は担当チャンネルが未解決なら guild の通知を破棄する', () => {
   const decision = decideDelivery({
-    owner: 'eagle',
+    owner: 'proj',
     ownerChannelId: null,
     chatId: OWNER_CH,
     entity: { id: OWNER_CH, type: 0 },
@@ -223,7 +223,7 @@ test('decideDelivery は DM 担当のとき DM を配送する', () => {
 
 test('decideDelivery は DM 担当でないセッションの DM を破棄する', () => {
   const decision = decideDelivery({
-    owner: 'eagle',
+    owner: 'proj',
     ownerChannelId: OWNER_CH,
     chatId: CHAT,
     entity: { id: CHAT, type: 1 },
@@ -232,13 +232,13 @@ test('decideDelivery は DM 担当でないセッションの DM を破棄する
 })
 
 test('decideDelivery はチャンネル実体を取得できなければ破棄する', () => {
-  const decision = decideDelivery({ owner: 'eagle', ownerChannelId: OWNER_CH, chatId: OWNER_CH, entity: null })
+  const decision = decideDelivery({ owner: 'proj', ownerChannelId: OWNER_CH, chatId: OWNER_CH, entity: null })
   expect(decision).toEqual({ action: 'drop', reason: 'CHANNEL_FETCH_FAILED' })
 })
 
 test('decideDelivery は取得した実体の id が要求と一致しなければ破棄する', () => {
   const decision = decideDelivery({
-    owner: 'eagle',
+    owner: 'proj',
     ownerChannelId: OWNER_CH,
     chatId: OWNER_CH,
     entity: { id: '55555555555555555', type: 0 },

@@ -23,7 +23,7 @@ afterEach(() => {
   else process.env.DISCORD_STATE_DIR = savedStateDir
 })
 
-const OWNER = 'eagle'
+const OWNER = 'proj'
 const PID = 4321
 const RUN = 'a'.repeat(32)
 const ACT = 'b'.repeat(32)
@@ -63,9 +63,9 @@ function target(over: Partial<ProgressTarget> = {}): ProgressTarget {
   }
 }
 
-// 担当チャンネル eagle が 1 件だけ見つかる guild 構成
+// 担当チャンネル proj が 1 件だけ見つかる guild 構成
 const ACCESS: Access = { allowFrom: [USER], groups: { [CH]: {} } }
-const GUILD_CHANNELS = [{ id: CH, name: 'eagle', type: 0 }, { id: '66666666666666666', name: 'other', type: 0 }]
+const GUILD_CHANNELS = [{ id: CH, name: 'proj', type: 0 }, { id: '66666666666666666', name: 'other', type: 0 }]
 
 type Posted = { channelId: string; payload: Record<string, unknown> }
 
@@ -206,7 +206,7 @@ test('createProgressSender は 12 時間を過ぎた宛先へ送らない', asyn
 test('outbound gate は担当が別チャンネルへ移っていたら送らない', async () => {
   setupActive()
   // 担当名に一致するチャンネルが別 id になった状態
-  const s = sender({ api: { getGuildChannels: async () => ({ ok: true, value: [{ id: '66666666666666666', name: 'eagle', type: 0 }] }) }, access: { allowFrom: [USER], groups: { '66666666666666666': {} } } })
+  const s = sender({ api: { getGuildChannels: async () => ({ ok: true, value: [{ id: '66666666666666666', name: 'proj', type: 0 }] }) }, access: { allowFrom: [USER], groups: { '66666666666666666': {} } } })
   expect(await s.send('x')).toBe('dropped')
   expect(s.posted).toHaveLength(0)
 })
@@ -214,7 +214,7 @@ test('outbound gate は担当が別チャンネルへ移っていたら送らな
 test('outbound gate は担当候補が複数なら送らない', async () => {
   setupActive()
   const s = sender({
-    api: { getGuildChannels: async () => ({ ok: true, value: [{ id: CH, name: 'eagle', type: 0 }, { id: '66666666666666666', name: 'Eagle', type: 0 }] }) },
+    api: { getGuildChannels: async () => ({ ok: true, value: [{ id: CH, name: 'proj', type: 0 }, { id: '66666666666666666', name: 'Proj', type: 0 }] }) },
     access: { allowFrom: [USER], groups: { [CH]: {}, '66666666666666666': {} } },
   })
   expect(await s.send('x')).toBe('dropped')

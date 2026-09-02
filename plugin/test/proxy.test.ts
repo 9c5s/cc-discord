@@ -29,7 +29,7 @@ afterEach(() => {
   else process.env.DISCORD_STATE_DIR = savedStateDir
 })
 
-const OWNER = 'eagle'
+const OWNER = 'proj'
 const PID = 4321
 const RUN = 'a'.repeat(32)
 const ACT = 'b'.repeat(32)
@@ -153,7 +153,7 @@ function harness(over: Record<string, unknown> = {}): Harness {
 
   const ctx: ProxyContext = {
     rewriter: createInitializeRewriter(),
-    ownerCtx: (over.ownerCtx as ProxyContext['ownerCtx']) ?? { kind: 'named', owner: OWNER, dir: 'D:\\projects\\eagle' },
+    ownerCtx: (over.ownerCtx as ProxyContext['ownerCtx']) ?? { kind: 'named', owner: OWNER, dir: 'C:\\example\\proj' },
     api,
     access: () => (over.access as Access) ?? ACCESS,
     ownerChannelId: () => (over.ownerChannelId as string | null | undefined) === undefined ? CH : (over.ownerChannelId as string | null),
@@ -218,7 +218,7 @@ test('handleServerMessage は担当なしのセッションでは通知を素通
 })
 
 test('handleServerMessage は担当名が壊れていれば通知を破棄する', async () => {
-  const h = harness({ ownerCtx: { kind: 'broken', dir: 'D:\\projects\\---' } })
+  const h = harness({ ownerCtx: { kind: 'broken', dir: 'C:\\example\\---' } })
   const msg = notification()
   await handleServerMessage(msg, raw(msg), h.ctx)
   expect(h.toClient).toEqual([])

@@ -5,6 +5,7 @@ import { tmpdir } from 'os'
 import { assertSendable, attachFooter, chunk, handleEditMessage, handleReply, resolveChunkLimit } from '../src/reply'
 import type { ApiResult, DiscordClient, OutFile } from '../src/discord-api'
 import type { Access } from '../src/access'
+import type { OwnerContext } from '../src/routing'
 
 const testTmpDir = join(tmpdir(), `discord-reply-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`)
 let savedStateDir: string | undefined
@@ -136,6 +137,7 @@ test('assertSendable は存在しないファイルを素通しする', () => {
 const CH = '33333333333333333'
 const MSG = '99999999999999999'
 const ACCESS: Access = { allowFrom: [], groups: { [CH]: {} } }
+const OWNER_CTX: OwnerContext = { kind: 'named', owner: 'proj', dir: '/w/proj' }
 
 type Sent = { channelId: string; payload: Record<string, unknown>; files?: OutFile[] }
 
@@ -172,6 +174,8 @@ function deps(over: Record<string, unknown> = {}) {
       access: () => (over.access as Access) ?? ACCESS,
       footer: () => (over.footer as string) ?? '',
       stopTyping: (id: string) => void stopped.push(id),
+      ownerCtx: (over.ownerCtx as OwnerContext) ?? OWNER_CTX,
+      ownerChannelId: () => (over.ownerChannelId === undefined ? CH : (over.ownerChannelId as string | null)),
       ...(over.deps as Record<string, unknown>),
     },
   }
@@ -335,4 +339,72 @@ test('handleEditMessage は snowflake でない識別子を拒否する', async 
   const d = deps()
   expect((await handleEditMessage({ chat_id: CH, message_id: 'x', text: 'new' }, d.deps)).isError).toBe(true)
   expect(d.edited).toHaveLength(0)
+})
+
+// --- 担当別 outbound gate ---
+
+const FOREIGN = '77777777777777777'
+
+test('handleReply は担当外のチャンネルへは送らない', async () => {
+  const d = deps({ access: { allowFrom: [], groups: { [CH]: {}, [FOREIGN]: {} } } })
+  const res = await handleReply({ chat_id: FOREIGN, text: 'hi' }, d.deps)
+  expect(res.isError).toBe(true)
+  expect(res.content[0].text).toContain('not owned by this session')
+  expect(d.sent).toHaveLength(0)
+})
+
+test('handleReply は担当チャンネル配下のスレッドへは送る', async () => {
+  const thread = '88888888888888888'
+  const d = deps({
+    access: { allowFrom: [], groups: { [CH]: {} } },
+    api: {
+      getChannel: async (id: string) => ({
+        ok: true,
+        value: id === thread ? { id, type: 11, parent_id: CH } : { id, type: 0 },
+      }),
+    },
+  })
+  const res = await handleReply({ chat_id: thread, text: 'hi' }, d.deps)
+  expect(res.isError).toBeUndefined()
+  expect(d.sent).toHaveLength(1)
+})
+
+test('handleReply は担当が未解決なら送らない', async () => {
+  const d = deps({ ownerChannelId: null })
+  const res = await handleReply({ chat_id: CH, text: 'hi' }, d.deps)
+  expect(res.isError).toBe(true)
+  expect(d.sent).toHaveLength(0)
+})
+
+test('handleReply は担当なしのセッションでは allowlist だけで判定する', async () => {
+  const d = deps({
+    ownerCtx: { kind: 'none' },
+    ownerChannelId: null,
+    access: { allowFrom: [], groups: { [CH]: {}, [FOREIGN]: {} } },
+  })
+  const res = await handleReply({ chat_id: FOREIGN, text: 'hi' }, d.deps)
+  expect(res.isError).toBeUndefined()
+  expect(d.sent).toHaveLength(1)
+})
+
+test('handleEditMessage は担当外のチャンネルでは編集しない', async () => {
+  const d = deps({ access: { allowFrom: [], groups: { [CH]: {}, [FOREIGN]: {} } } })
+  const res = await handleEditMessage({ chat_id: FOREIGN, message_id: MSG, text: 'hi' }, d.deps)
+  expect(res.isError).toBe(true)
+  expect(d.edited).toHaveLength(0)
+})
+
+// --- typing の停止 ---
+
+test('handleReply は text が不正でも typing を止める', async () => {
+  const d = deps()
+  const res = await handleReply({ chat_id: CH, text: 42 }, d.deps)
+  expect(res.isError).toBe(true)
+  expect(d.stopped).toEqual([CH])
+})
+
+test('handleReply は担当外でも typing を止める', async () => {
+  const d = deps({ access: { allowFrom: [], groups: { [CH]: {}, [FOREIGN]: {} } } })
+  await handleReply({ chat_id: FOREIGN, text: 'hi' }, d.deps)
+  expect(d.stopped).toEqual([FOREIGN])
 })

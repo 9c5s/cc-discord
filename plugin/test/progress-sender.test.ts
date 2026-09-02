@@ -96,7 +96,7 @@ function sender(over: Record<string, unknown> = {}) {
   const s = createProgressSender({
     api: f.api,
     access: () => (over.access as Access) ?? ACCESS,
-    owner: OWNER,
+    owner: (over.owner as string) ?? OWNER,
     claudePid: PID,
     runId: RUN,
     activationId: ACT,
@@ -244,20 +244,28 @@ test('outbound gate は guild 一覧の取得に失敗したら送らない', as
   expect(await s.send('x')).toBe('dropped')
 })
 
-test('outbound gate は DM を allowFrom で判定する', async () => {
+test('outbound gate は DM 担当のセッションだけに DM を許す', async () => {
+  writePointer(pointer())
+  writeHeartbeat(PID, RUN, NOW)
+  writeTarget('cc-discord', target({ id: DM_CH, parent: DM_CH, kind: 'dm' }))
+  const s = sender({ owner: 'cc-discord' })
+  expect(await s.send('x')).toBe('sent')
+  expect(s.posted[0].channelId).toBe(DM_CH)
+})
+
+test('outbound gate は DM 担当でないセッションの DM 宛の宛先を拒む', async () => {
   writePointer(pointer())
   writeHeartbeat(PID, RUN, NOW)
   writeTarget(OWNER, target({ id: DM_CH, parent: DM_CH, kind: 'dm' }))
   const s = sender()
-  expect(await s.send('x')).toBe('sent')
-  expect(s.posted[0].channelId).toBe(DM_CH)
+  expect(await s.send('x')).toBe('dropped')
 })
 
 test('outbound gate は allowFrom から外れた DM へ送らない', async () => {
   writePointer(pointer())
   writeHeartbeat(PID, RUN, NOW)
-  writeTarget(OWNER, target({ id: DM_CH, parent: DM_CH, kind: 'dm' }))
-  const s = sender({ access: { allowFrom: [], groups: { [CH]: {} } } })
+  writeTarget('cc-discord', target({ id: DM_CH, parent: DM_CH, kind: 'dm' }))
+  const s = sender({ owner: 'cc-discord', access: { allowFrom: [], groups: { [CH]: {} } } })
   expect(await s.send('x')).toBe('dropped')
 })
 

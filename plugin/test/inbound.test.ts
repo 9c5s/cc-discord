@@ -46,13 +46,22 @@ test('acquireInboundLock は不正な担当名や message_id では取らない'
 
 // --- sweepInboundLocks ---
 
-test('sweepInboundLocks は 60 秒より古いロックを消す', () => {
+test('sweepInboundLocks は 12 時間より古いロックを消す', () => {
   acquireInboundLock(OWNER, MSG)
   const f = join(progressDir(), `${OWNER}.lock-${MSG}`)
-  const old = new Date(Date.now() - 61_000)
+  const old = new Date(Date.now() - 13 * 60 * 60 * 1000)
   utimesSync(f, old, old)
   expect(sweepInboundLocks(OWNER)).toBe(1)
   expect(existsSync(f)).toBe(false)
+})
+
+test('sweepInboundLocks は処理が長引いた分のロックを残す', () => {
+  acquireInboundLock(OWNER, MSG)
+  const f = join(progressDir(), `${OWNER}.lock-${MSG}`)
+  const old = new Date(Date.now() - 5 * 60 * 1000)
+  utimesSync(f, old, old)
+  expect(sweepInboundLocks(OWNER)).toBe(0)
+  expect(existsSync(f)).toBe(true)
 })
 
 test('sweepInboundLocks は新しいロックを残す', () => {
@@ -64,7 +73,7 @@ test('sweepInboundLocks は新しいロックを残す', () => {
 test('sweepInboundLocks は他の担当のロックを消さない', () => {
   acquireInboundLock('other', MSG)
   const f = join(progressDir(), `other.lock-${MSG}`)
-  const old = new Date(Date.now() - 61_000)
+  const old = new Date(Date.now() - 13 * 60 * 60 * 1000)
   utimesSync(f, old, old)
   expect(sweepInboundLocks(OWNER)).toBe(0)
   expect(existsSync(f)).toBe(true)

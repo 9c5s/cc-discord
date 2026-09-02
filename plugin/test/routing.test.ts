@@ -3,6 +3,7 @@ import {
   classifyInbound,
   decideDelivery,
   decideOutbound,
+  inboundFreshness,
   ownerContext,
   resolveOwnerChannel,
   type GuildChannels,
@@ -336,4 +337,19 @@ test('decideOutbound は担当名が壊れているセッションの送信を�
     ok: false,
     reason: 'ROUTING_BROKEN',
   })
+})
+
+test('classifyInbound は未来に寄りすぎた通知を破棄する', () => {
+  const future = snowflakeAt(NOW + 10 * 60 * 1000)
+  expect(classifyInbound(named, { chat_id: CHAT, message_id: future }, NOW)).toEqual({
+    action: 'drop',
+    reason: 'TOO_NEW',
+  })
+})
+
+test('inboundFreshness は上限の内と外を区別する', () => {
+  expect(inboundFreshness(snowflakeAt(NOW), NOW)).toBe('fresh')
+  expect(inboundFreshness(snowflakeAt(NOW - 2 * 60 * 60 * 1000), NOW)).toBe('TOO_OLD')
+  expect(inboundFreshness(snowflakeAt(NOW + 10 * 60 * 1000), NOW)).toBe('TOO_NEW')
+  expect(inboundFreshness('abc', NOW)).toBe('INVALID_ID')
 })

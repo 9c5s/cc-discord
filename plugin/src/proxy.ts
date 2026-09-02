@@ -21,7 +21,14 @@ import { deleteTarget, listTargets, writeProgressBody, writeTarget } from './pro
 import { createWriter, readJsonLines, type Json, type Writer } from './relay'
 import { handleEditMessage, handleReply } from './reply'
 import { stateDir } from './routes'
-import { classifyInbound, decideDelivery, decideOutbound, ownerContext, type OwnerContext } from './routing'
+import {
+  classifyInbound,
+  decideDelivery,
+  decideOutbound,
+  inboundFreshness,
+  ownerContext,
+  type OwnerContext,
+} from './routing'
 import { archiveStaleThreads } from './stale-threads'
 import { ensureFresh } from './usage'
 
@@ -158,6 +165,14 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
   // 同じ inbound を複数のセッションが処理しないよう wx で 1 プロセスに絞る
   if (!acquireInboundLock(owner, messageId)) {
     ctx.log(`inbound dropped: lock is held message=${messageId}`)
+    return
+  }
+
+  // 実体の取得を待つ間に鮮度が切れていないか確かめ直す
+  // 待ちが長引くと 回収済みのロックを取り直して古い通知を二重に配送しうる
+  const freshness = inboundFreshness(messageId, (ctx.now ?? Date.now)())
+  if (freshness !== 'fresh') {
+    ctx.log(`inbound dropped after locking: ${freshness} message=${messageId}`)
     return
   }
 

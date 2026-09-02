@@ -88,6 +88,21 @@ export function isThread(entity: ChannelEntity): boolean {
 // 回収された後のロックを取り直して同じ通知を二重に処理する余地を無くす
 // 処理が詰まって時間が空いた場合や プロセスが長く止まって再開した場合にも 古い通知は配送しない
 export const INBOUND_MAX_AGE_MS = 60 * 60 * 1000
+// 未来側に許す時計のずれ
+// 上限を設けないと 時計が大きく遅れた環境で古い通知が新しく見えてしまう
+export const INBOUND_MAX_SKEW_MS = 5 * 60 * 1000
+
+export type Freshness = 'fresh' | 'TOO_OLD' | 'TOO_NEW' | 'INVALID_ID'
+
+// 通知の鮮度を message_id の生成時刻で見る
+// ロックを取る前と取った後の 2 回使う (取得を待つ間に鮮度が切れることがある)
+export function inboundFreshness(messageId: unknown, now: number = Date.now()): Freshness {
+  const sentAt = snowflakeTime(messageId)
+  if (sentAt === null) return 'INVALID_ID'
+  if (now - sentAt > INBOUND_MAX_AGE_MS) return 'TOO_OLD'
+  if (sentAt - now > INBOUND_MAX_SKEW_MS) return 'TOO_NEW'
+  return 'fresh'
+}
 
 export type InboundMeta = { chat_id?: unknown; message_id?: unknown }
 
@@ -102,8 +117,8 @@ export function classifyInbound(ctx: OwnerContext, meta: InboundMeta, now: numbe
   if (ctx.kind === 'none') return { action: 'passthrough' }
   if (ctx.kind === 'broken') return { action: 'drop', reason: 'ROUTING_BROKEN' }
   if (!isSnowflake(meta.chat_id) || !isSnowflake(meta.message_id)) return { action: 'drop', reason: 'INVALID_ID' }
-  const sentAt = snowflakeTime(meta.message_id)
-  if (sentAt === null || now - sentAt > INBOUND_MAX_AGE_MS) return { action: 'drop', reason: 'TOO_OLD' }
+  const freshness = inboundFreshness(meta.message_id, now)
+  if (freshness !== 'fresh') return { action: 'drop', reason: freshness }
   return { action: 'inspect', owner: ctx.owner, chatId: meta.chat_id, messageId: meta.message_id }
 }
 

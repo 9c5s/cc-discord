@@ -138,3 +138,38 @@ test('isAllowedTarget は実体を取得できなければ拒否する', () => {
 test('isAllowedTarget は取得した実体の id が要求と一致しなければ拒否する', () => {
   expect(isAllowedTarget(access, GROUP_CH, { id: '55555555555555555', type: 0 })).toBe(false)
 })
+
+// --- 送信設定の検証 ---
+
+test('readAccess は数値でない textChunkLimit を採用しない', () => {
+  writeAccess(JSON.stringify({ allowFrom: [], groups: {}, textChunkLimit: '500' }))
+  expect(readAccess().textChunkLimit).toBeUndefined()
+})
+
+test('readAccess は有限でない textChunkLimit を採用しない', () => {
+  writeAccess('{"allowFrom":[],"groups":{},"textChunkLimit":1e999}')
+  expect(readAccess().textChunkLimit).toBeUndefined()
+})
+
+test('readAccess は既知でない replyToMode を採用しない', () => {
+  writeAccess(JSON.stringify({ allowFrom: [], groups: {}, replyToMode: 'sometimes' }))
+  expect(readAccess().replyToMode).toBeUndefined()
+})
+
+test('readAccess は既知でない chunkMode を採用しない', () => {
+  writeAccess(JSON.stringify({ allowFrom: [], groups: {}, chunkMode: 'smart' }))
+  expect(readAccess().chunkMode).toBeUndefined()
+})
+
+test('readAccess は既知の送信設定をそのまま採用する', () => {
+  writeAccess(JSON.stringify({ allowFrom: [], groups: {}, replyToMode: 'all', chunkMode: 'newline', textChunkLimit: 500 }))
+  const a = readAccess()
+  expect(a.replyToMode).toBe('all')
+  expect(a.chunkMode).toBe('newline')
+  expect(a.textChunkLimit).toBe(500)
+})
+
+test('readAccess は allowFrom の文字列でない要素を落とす', () => {
+  writeAccess(JSON.stringify({ allowFrom: ['1', 2, null], groups: {} }))
+  expect(readAccess().allowFrom).toEqual(['1'])
+})

@@ -21,22 +21,39 @@ function defaultAccess(): Access {
   return { allowFrom: [], groups: {} }
 }
 
+// 送信設定の既知の値
+// 公式 server の既定に合わせ 未知の値と型違いは無かったものとして扱う
+const REPLY_TO_MODES = new Set(['off', 'first', 'all'])
+const CHUNK_MODES = new Set(['length', 'newline'])
+
 // access.json を 1 回読む
 // 不在も解析不能も既定値 (allowFrom 空 / groups 空) として扱い 例外は投げない
+// 値はすべて実行時に検証する (型注釈は JSON の中身を保証しない)
 export function readAccess(): Access {
-  let parsed: Partial<Access>
+  let parsed: Record<string, unknown>
   try {
-    parsed = JSON.parse(readFileSync(join(stateDir(), 'access.json'), 'utf8')) as Partial<Access>
+    parsed = JSON.parse(readFileSync(join(stateDir(), 'access.json'), 'utf8')) as Record<string, unknown>
   } catch {
     return defaultAccess()
   }
+  if (typeof parsed !== 'object' || parsed === null) return defaultAccess()
+
   const a: Access = {
-    allowFrom: Array.isArray(parsed.allowFrom) ? parsed.allowFrom : [],
-    groups: typeof parsed.groups === 'object' && parsed.groups !== null ? parsed.groups : {},
+    allowFrom: Array.isArray(parsed.allowFrom) ? parsed.allowFrom.filter((v): v is string => typeof v === 'string') : [],
+    groups:
+      typeof parsed.groups === 'object' && parsed.groups !== null
+        ? (parsed.groups as Record<string, GroupPolicy>)
+        : {},
   }
-  if (parsed.replyToMode !== undefined) a.replyToMode = parsed.replyToMode
-  if (parsed.textChunkLimit !== undefined) a.textChunkLimit = parsed.textChunkLimit
-  if (parsed.chunkMode !== undefined) a.chunkMode = parsed.chunkMode
+  if (typeof parsed.replyToMode === 'string' && REPLY_TO_MODES.has(parsed.replyToMode)) {
+    a.replyToMode = parsed.replyToMode as Access['replyToMode']
+  }
+  if (typeof parsed.textChunkLimit === 'number' && Number.isFinite(parsed.textChunkLimit)) {
+    a.textChunkLimit = parsed.textChunkLimit
+  }
+  if (typeof parsed.chunkMode === 'string' && CHUNK_MODES.has(parsed.chunkMode)) {
+    a.chunkMode = parsed.chunkMode as Access['chunkMode']
+  }
   return a
 }
 

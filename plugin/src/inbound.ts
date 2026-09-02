@@ -1,6 +1,6 @@
 import { closeSync, mkdirSync, openSync, readdirSync, rmSync, statSync } from 'fs'
 import type { DiscordClient } from './discord-api'
-import { isSnowflake, resolveInDir } from './ids'
+import { isOwnerName, isSnowflake, resolveInDir } from './ids'
 import { progressDir } from './progress-target'
 import { threadName } from './summarize'
 
@@ -19,12 +19,8 @@ const SUPPRESS_NOTIFICATIONS = 1 << 12
 // スレッドのアンカーに使う可視文字の無い 1 文字 (ZWSP)
 const ANCHOR_TEXT = '​'
 
-function isOwner(owner: string): boolean {
-  return /^[a-z0-9-]+$/.test(owner)
-}
-
 function lockPath(owner: string, messageId: string): string | null {
-  if (!isOwner(owner) || !isSnowflake(messageId)) return null
+  if (!isOwnerName(owner) || !isSnowflake(messageId)) return null
   return resolveInDir(progressDir(), `${owner}.lock-${messageId}`)
 }
 
@@ -45,7 +41,7 @@ export function acquireInboundLock(owner: string, messageId: string): boolean {
 // 同じ担当の古いロックを回収する
 // 宛先ファイル (.meta) と本体には触れない
 export function sweepInboundLocks(owner: string, now: number = Date.now()): number {
-  if (!isOwner(owner)) return 0
+  if (!isOwnerName(owner)) return 0
   let names: string[]
   try {
     names = readdirSync(progressDir())

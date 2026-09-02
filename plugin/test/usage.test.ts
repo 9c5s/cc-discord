@@ -9,7 +9,6 @@ import {
   readAccessToken,
   readCachedUsage,
   refreshModelUsage,
-  withCachedWeekly,
   type ModelUsageEntry,
 } from '../src/usage'
 
@@ -424,38 +423,4 @@ test('ensureFresh は試行時刻を書き込めなくても例外を投げな�
     }),
   ).not.toThrow()
   expect(spawned).toBe(false)
-})
-
-// --- 7d 全体の差し替え ---
-
-const WEEKLY_CACHE = { used_percentage: 51, resets_at: 1787454000 }
-const STDIN_DATA = {
-  rate_limits: {
-    five_hour: { used_percentage: 30, resets_at: 1787383200 },
-    seven_day: { used_percentage: 99, resets_at: 1 },
-  },
-}
-
-test('withCachedWeekly は渡された週次値で seven_day を差し替える', () => {
-  const got = withCachedWeekly(STDIN_DATA, WEEKLY_CACHE) as Record<string, Record<string, unknown>>
-  expect(got.rate_limits.seven_day).toEqual(WEEKLY_CACHE)
-})
-
-test('withCachedWeekly は 5h を差し替えない', () => {
-  const got = withCachedWeekly(STDIN_DATA, WEEKLY_CACHE) as Record<string, Record<string, unknown>>
-  expect(got.rate_limits.five_hour).toEqual(STDIN_DATA.rate_limits.five_hour)
-})
-
-test('withCachedWeekly は週次値が null なら元の data を返す', () => {
-  expect(withCachedWeekly(STDIN_DATA, null)).toEqual(STDIN_DATA)
-})
-
-test('withCachedWeekly は元の data を書き換えない', () => {
-  withCachedWeekly(STDIN_DATA, WEEKLY_CACHE)
-  expect(STDIN_DATA.rate_limits.seven_day.used_percentage).toBe(99)
-})
-
-test('withCachedWeekly は rate_limits が無ければ元の data を返す', () => {
-  const d = { model: { display_name: 'Fable 5' } }
-  expect(withCachedWeekly(d, WEEKLY_CACHE)).toEqual(d)
 })

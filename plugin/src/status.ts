@@ -2,8 +2,8 @@ import { readFileSync } from 'fs'
 import { join, resolve } from 'path'
 import type { ModelUsageEntry } from './usage'
 
-// statusline JSON からリプライ末尾に付ける3行ステータスブロックを構築するモジュール
-// statusline-tee.ts が書き込み discord プラグイン server.ts (patch) が読んで reply 末尾に付ける
+// reply 末尾に付けるステータスブロックを組み立てるモジュール
+// 入力は footer.ts が現行 activation の transcript と使用量キャッシュから集めた値である
 
 type J = Record<string, unknown>
 const obj = (v: unknown): J | null => (typeof v === 'object' && v !== null ? (v as J) : null)

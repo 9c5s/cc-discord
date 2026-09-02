@@ -1,9 +1,6 @@
 import { test, expect } from 'bun:test'
 import { PassThrough } from 'stream'
-import { mkdirSync, rmSync, writeFileSync } from 'fs'
-import { join } from 'path'
-import { tmpdir } from 'os'
-import { officialPluginDir, relayLines } from '../src/proxy'
+import { relayLines } from '../src/proxy'
 
 // --- relayLines ---
 
@@ -88,44 +85,3 @@ test('relayLines は空行を無視する', async () => {
   expect(out()).toBe('{"method":"x"}\n')
 })
 
-// --- officialPluginDir ---
-
-function withRegistry(registry: unknown, fn: (configDir: string) => void): void {
-  const dir = join(tmpdir(), `cc-discord-proxy-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`)
-  mkdirSync(join(dir, 'plugins'), { recursive: true })
-  writeFileSync(join(dir, 'plugins', 'installed_plugins.json'), JSON.stringify(registry))
-  try {
-    fn(dir)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-}
-
-test('officialPluginDir は user scope の installPath を優先する', () => {
-  withRegistry({
-    plugins: {
-      'discord@claude-plugins-official': [
-        { scope: 'project', installPath: 'C:\\proj\\discord' },
-        { scope: 'user', installPath: 'C:\\user\\discord' },
-      ],
-    },
-  }, (dir) => {
-    expect(officialPluginDir(dir)).toBe('C:\\user\\discord')
-  })
-})
-
-test('officialPluginDir は user scope が無ければ先頭のエントリを使う', () => {
-  withRegistry({
-    plugins: {
-      'discord@claude-plugins-official': [{ scope: 'project', installPath: 'C:\\proj\\discord' }],
-    },
-  }, (dir) => {
-    expect(officialPluginDir(dir)).toBe('C:\\proj\\discord')
-  })
-})
-
-test('officialPluginDir は公式プラグイン未インストール時に throw する', () => {
-  withRegistry({ plugins: {} }, (dir) => {
-    expect(() => officialPluginDir(dir)).toThrow('not installed')
-  })
-})

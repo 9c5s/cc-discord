@@ -8,11 +8,11 @@
 //   3. client -> server の reply ツール呼び出しで typing を停止する
 
 import { spawn } from 'child_process'
-import { appendFileSync, mkdirSync, readFileSync } from 'fs'
-import { homedir } from 'os'
+import { appendFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { StringDecoder } from 'string_decoder'
 import { botToken, ownerName } from './notify'
+import { officialPluginDir } from './official'
 import { stateDir } from './routes'
 
 const API = 'https://discord.com/api/v10'
@@ -31,17 +31,6 @@ function log(msg: string): void {
   } catch {
     // ログ失敗は無視する
   }
-}
-
-// 公式 discord プラグインのインストール先を installed_plugins.json から解決する
-// user scope を優先し 無ければ最初のエントリを使う
-export function officialPluginDir(configDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')): string {
-  const reg = JSON.parse(readFileSync(join(configDir, 'plugins', 'installed_plugins.json'), 'utf8')) as Json
-  const plugins = (reg.plugins ?? {}) as Record<string, Array<{ scope?: string; installPath?: string }>>
-  const entries = plugins['discord@claude-plugins-official'] ?? []
-  const path = entries.find((e) => e.scope === 'user')?.installPath ?? entries[0]?.installPath
-  if (!path) throw new Error('discord@claude-plugins-official is not installed')
-  return path
 }
 
 // typing 継続 ---

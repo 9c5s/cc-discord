@@ -2,7 +2,7 @@ import { test, expect, beforeEach, afterEach } from 'bun:test'
 import { mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { archiveStaleThreads, isStaleThread, snowflakeTime } from '../src/stale-threads'
+import { archiveStaleThreads, isStaleThread } from '../src/stale-threads'
 import { readProgressBody, readTarget, writeProgressBody, writeTarget, type ProgressTarget } from '../src/progress-target'
 import type { ApiResult, DiscordClient } from '../src/discord-api'
 
@@ -52,16 +52,6 @@ function thread(over: Record<string, unknown> = {}): Record<string, unknown> {
     ...over,
   }
 }
-
-// --- snowflakeTime ---
-
-test('snowflakeTime は snowflake から生成時刻を復元する', () => {
-  expect(snowflakeTime(snowflakeAt(OLD))).toBe(OLD)
-})
-
-test('snowflakeTime は snowflake でない値で null を返す', () => {
-  expect(snowflakeTime('abc')).toBe(null)
-})
 
 // --- isStaleThread ---
 
@@ -137,13 +127,22 @@ test('archiveStaleThreads は対象スレッドを archive する', async () => 
   expect(a.archived).toEqual(['44444444444444444'])
 })
 
-test('archiveStaleThreads は対象スレッドを指す宛先だけを消す', async () => {
+test('archiveStaleThreads は有効な宛先が残っているスレッドを閉じない', async () => {
   writeTarget(OWNER, target())
+  const a = fakeApi([thread()])
+  expect(await archiveStaleThreads(a.api, args)).toEqual([])
+  expect(a.archived).toEqual([])
+  expect(readTarget(OWNER, ACT)).not.toBe(null)
+})
+
+test('archiveStaleThreads は対象スレッドを指す失効した宛先だけを消す', async () => {
+  writeTarget(OWNER, target({ written_at: NOW - 13 * 60 * 60 * 1000 }))
   writeTarget(OWNER, target({ activation_id: OTHER_ACT, id: '44444444444444449' }))
   const a = fakeApi([thread()])
   await archiveStaleThreads(a.api, args)
   expect(readTarget(OWNER, ACT)).toBe(null)
   expect(readTarget(OWNER, OTHER_ACT)).not.toBe(null)
+  expect(a.archived).toEqual(['44444444444444444'])
 })
 
 test('archiveStaleThreads は期限切れの宛先も id が一致すれば消す', async () => {
@@ -162,7 +161,7 @@ test('archiveStaleThreads は本体を内容が一致するときだけ消す', 
 
 test('archiveStaleThreads は別スレッドを指す本体を残す', async () => {
   writeProgressBody(OWNER, '44444444444444449')
-  writeTarget(OWNER, target())
+  writeTarget(OWNER, target({ written_at: NOW - 13 * 60 * 60 * 1000 }))
   const a = fakeApi([thread()])
   await archiveStaleThreads(a.api, args)
   expect(readProgressBody(OWNER)).toBe('44444444444444449')

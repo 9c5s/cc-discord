@@ -1,6 +1,6 @@
 import { test, expect } from 'bun:test'
 import { join } from 'path'
-import { isSnowflake, isSessionId, isHex32, isPid, resolveInDir } from '../src/ids'
+import { isSnowflake, isSessionId, isHex32, isPid, resolveInDir, snowflakeTime } from '../src/ids'
 
 // --- isSnowflake ---
 
@@ -99,4 +99,17 @@ test('resolveInDir は空文字とカレント参照を拒否する', () => {
 test('resolveInDir は絶対パスを拒否する', () => {
   expect(resolveInDir('/base/dir', '/etc/passwd')).toBe(null)
   expect(resolveInDir('/base/dir', 'C:\\Windows\\System32')).toBe(null)
+})
+
+// --- snowflakeTime ---
+
+test('snowflakeTime は snowflake から生成時刻を復元する', () => {
+  const at = 1_800_000_000_000
+  const id = String((BigInt(at - 1_420_070_400_000) << 22n))
+  expect(snowflakeTime(id)).toBe(at)
+})
+
+test('snowflakeTime は snowflake でない値で null を返す', () => {
+  expect(snowflakeTime('abc')).toBe(null)
+  expect(snowflakeTime(undefined)).toBe(null)
 })

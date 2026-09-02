@@ -1,5 +1,5 @@
 import type { DiscordClient } from './discord-api'
-import { isSnowflake } from './ids'
+import { isOwnerName, isSnowflake } from './ids'
 import { deleteProgressBody, deleteTarget, listTargets, readProgressBody } from './progress-target'
 
 // 滞留した進捗スレッドの archive ---
@@ -53,10 +53,13 @@ export function isStaleThread(
 // 滞留スレッドを閉じ その宛先を取り除く
 // 宛先 (.meta) は id が一致するものだけ 本体は内容が一致するときだけ消す
 // 片方の一致を理由に他方を消さない (本体と .meta が別スレッドを指しうるため)
+// 宛先を取り除けなかったスレッドは閉じない (watcher が投稿して開き直すため)
 export async function archiveStaleThreads(
   api: DiscordClient,
   args: { owner: string; guildId: string; ownerChannelId: string; botId: string; now?: number },
 ): Promise<string[]> {
+  // 宛先を操作できない担当名では閉じない (指したままのスレッドを閉じることになる)
+  if (!isOwnerName(args.owner)) return []
   const now = args.now ?? Date.now()
   const res = await api.getActiveThreads(args.guildId)
   if (!res.ok) return []
@@ -68,10 +71,12 @@ export async function archiveStaleThreads(
     if (!isSnowflake(id)) continue
 
     // 閉じる前に この スレッドを指す宛先だけを取り除く
+    let released = true
     for (const entry of listTargets(args.owner)) {
-      if (entry.target.id === id) deleteTarget(args.owner, entry.activationId)
+      if (entry.target.id === id) released = deleteTarget(args.owner, entry.activationId) && released
     }
-    if (readProgressBody(args.owner) === id) deleteProgressBody(args.owner)
+    if (readProgressBody(args.owner) === id) released = deleteProgressBody(args.owner) && released
+    if (!released) continue
 
     const done = await api.archiveThread(id)
     if (done.ok) archived.push(id)

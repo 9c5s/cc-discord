@@ -66,7 +66,7 @@ function resolver(over: Record<string, unknown> = {}) {
     api: fakeApi((over.api as Record<string, unknown>) ?? {}),
     access: (over.access as () => Access) ?? (() => ACCESS),
     owner: OWNER,
-    now: () => NOW,
+    now: (over.now as () => number) ?? (() => NOW),
     log: (m: string) => void logs.push(m),
   })
   return { r, logs }
@@ -239,4 +239,69 @@ test('createOwnerResolver は前の周期が終わるまで次を始めない', 
   expect(started).toBe(1)
   release?.()
   await first
+})
+
+// --- 取得失敗が続いたとき ---
+
+// 1 回目だけ成功し 以後は guild 一覧の取得に失敗する resolver を作る
+function failingAfterFirst(clock: () => number) {
+  let calls = 0
+  return resolver({
+    now: clock,
+    api: {
+      getGuilds: async () => {
+        calls++
+        return calls === 1 ? { ok: true as const, value: [{ id: GUILD }] } : { ok: false as const, error: 'http 500' }
+      },
+    },
+  })
+}
+
+test('createOwnerResolver は取得に失敗しても猶予の内は担当を保つ', async () => {
+  let clock = NOW
+  const { r } = failingAfterFirst(() => clock)
+  await r.resolve()
+  expect(r.channelId()).toBe(CH)
+
+  clock = NOW + 4 * 60_000
+  await r.resolve()
+  expect(r.channelId()).toBe(CH)
+  expect(readRoute(OWNER)).toBe(CH)
+})
+
+test('createOwnerResolver は取得の失敗が猶予を超えたら担当を手放す', async () => {
+  let clock = NOW
+  const { r } = failingAfterFirst(() => clock)
+  await r.resolve()
+
+  clock = NOW + 6 * 60_000
+  await r.resolve()
+  expect(r.channelId()).toBeNull()
+  expect(r.guildId()).toBeNull()
+  expect(readRoute(OWNER)).toBeNull()
+})
+
+test('createOwnerResolver は解決に成功し直せば猶予を数え直す', async () => {
+  let clock = NOW
+  let fail = false
+  const { r } = resolver({
+    now: () => clock,
+    api: {
+      getGuilds: async () =>
+        fail ? { ok: false as const, error: 'http 500' } : { ok: true as const, value: [{ id: GUILD }] },
+    },
+  })
+  await r.resolve()
+
+  fail = true
+  clock = NOW + 4 * 60_000
+  await r.resolve()
+  fail = false
+  clock = NOW + 5 * 60_000
+  await r.resolve()
+
+  fail = true
+  clock = NOW + 9 * 60_000
+  await r.resolve()
+  expect(r.channelId()).toBe(CH)
 })

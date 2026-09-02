@@ -81,6 +81,14 @@ test('429 の待機は 5 秒を上限にする', async () => {
   expect(waits).toEqual([5000])
 })
 
+test('autoRetry を切ると 429 で再送せず待ち時間を返す', async () => {
+  const { api, calls } = client([{ status: 429, json: { retry_after: 2 } }])
+  const res = await api.createMessage(CH, { content: 'x' }, undefined, { autoRetry: false })
+  expect(res.ok).toBe(false)
+  expect(res.ok === false && res.retryAfterMs).toBe(2000)
+  expect(calls).toHaveLength(1)
+})
+
 test('再送も 429 なら失敗を返す', async () => {
   const { api, calls } = client([{ status: 429, json: { retry_after: 0.1 } }])
   const res = await api.getChannel(CH)

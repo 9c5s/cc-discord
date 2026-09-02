@@ -14,7 +14,11 @@ const MAX_RETRY_WAIT_MS = 5_000
 // proxy の担当解決 (60 秒周期) と watcher の gate で同じ鮮度にする
 const CACHE_TTL_MS = 60_000
 
-export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string }
+// 失敗のうち 429 だけは待ち時間を返す
+// 進捗送信は待機の後に activation と outbound gate をやり直すため 自動再送を使わない
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; retryAfterMs?: number }
+
+export type SendOptions = { autoRetry?: boolean }
 
 export type OutFile = { name: string; data: Uint8Array; type: string }
 
@@ -25,7 +29,12 @@ export type DiscordClient = {
   getCurrentUser(): Promise<ApiResult<{ id: string }>>
   getActiveThreads(guildId: string): Promise<ApiResult<ChannelEntity[]>>
   sendTyping(channelId: string): Promise<ApiResult<null>>
-  createMessage(channelId: string, payload: Record<string, unknown>, files?: OutFile[]): Promise<ApiResult<{ id: string }>>
+  createMessage(
+    channelId: string,
+    payload: Record<string, unknown>,
+    files?: OutFile[],
+    send?: SendOptions,
+  ): Promise<ApiResult<{ id: string }>>
   editMessage(channelId: string, messageId: string, payload: Record<string, unknown>): Promise<ApiResult<{ id: string }>>
   startThread(channelId: string, messageId: string, payload: Record<string, unknown>): Promise<ApiResult<{ id: string }>>
   archiveThread(threadId: string): Promise<ApiResult<null>>
@@ -62,13 +71,13 @@ export function createDiscordClient(opts: ClientOptions = {}): DiscordClient {
     return Math.min(sec * 1000, MAX_RETRY_WAIT_MS)
   }
 
-  async function request<T>(path: string, init: RequestInit = {}): Promise<ApiResult<T>> {
+  async function request<T>(path: string, init: RequestInit = {}, send?: SendOptions): Promise<ApiResult<T>> {
     if (!token) return { ok: false, error: 'no bot token' }
     const headers: Record<string, string> = { Authorization: `Bot ${token}`, ...(init.headers as Record<string, string>) }
     // multipart では境界を fetch に決めさせるため Content-Type を付けない
     if (typeof init.body === 'string') headers['Content-Type'] = 'application/json'
 
-    const send = async (): Promise<Response | string> => {
+    const doSend = async (): Promise<Response | string> => {
       try {
         return await doFetch(`${API}${path}`, { ...init, headers, signal: AbortSignal.timeout(TIMEOUT_MS) })
       } catch (e) {
@@ -76,11 +85,13 @@ export function createDiscordClient(opts: ClientOptions = {}): DiscordClient {
       }
     }
 
-    let res = await send()
+    let res = await doSend()
     if (typeof res === 'string') return { ok: false, error: res }
     if (res.status === 429) {
-      await sleep(await retryWaitMs(res))
-      const retry = await send()
+      const waitMs = await retryWaitMs(res)
+      if (send?.autoRetry === false) return { ok: false, error: 'rate limited', retryAfterMs: waitMs }
+      await sleep(waitMs)
+      const retry = await doSend()
       if (typeof retry === 'string') return { ok: false, error: retry }
       res = retry
     }
@@ -132,15 +143,16 @@ export function createDiscordClient(opts: ClientOptions = {}): DiscordClient {
       if (!isSnowflake(channelId)) return Promise.resolve(invalidId(channelId))
       return request<null>(`/channels/${channelId}/typing`, { method: 'POST' })
     },
-    createMessage(channelId, payload, files) {
+    createMessage(channelId, payload, files, send) {
       if (!isSnowflake(channelId)) return Promise.resolve(invalidId(channelId))
+      const path = `/channels/${channelId}/messages`
       if (!files || files.length === 0) {
-        return request<{ id: string }>(`/channels/${channelId}/messages`, { method: 'POST', body: JSON.stringify(payload) })
+        return request<{ id: string }>(path, { method: 'POST', body: JSON.stringify(payload) }, send)
       }
       const form = new FormData()
       form.append('payload_json', JSON.stringify(payload))
       files.forEach((f, i) => form.append(`files[${i}]`, new File([f.data as BlobPart], f.name, { type: f.type })))
-      return request<{ id: string }>(`/channels/${channelId}/messages`, { method: 'POST', body: form })
+      return request<{ id: string }>(path, { method: 'POST', body: form }, send)
     },
     editMessage(channelId, messageId, payload) {
       if (!isSnowflake(channelId)) return Promise.resolve(invalidId(channelId))

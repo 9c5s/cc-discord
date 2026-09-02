@@ -23,7 +23,7 @@ afterEach(() => {
   else process.env.DISCORD_STATE_DIR = savedStateDir
 })
 
-const OWNER = 'eagle'
+const OWNER = 'proj'
 const CH = '33333333333333333'
 const OTHER_CH = '66666666666666666'
 const GUILD = '11111111111111111'
@@ -54,7 +54,7 @@ function target(over: Partial<ProgressTarget> = {}): ProgressTarget {
 function fakeApi(over: Record<string, unknown> = {}) {
   const api = {
     getGuilds: async (): Promise<ApiResult<Array<{ id: string }>>> => ({ ok: true, value: [{ id: GUILD }] }),
-    getGuildChannels: async () => ({ ok: true as const, value: [{ id: CH, name: 'eagle', type: 0 }] }),
+    getGuildChannels: async () => ({ ok: true as const, value: [{ id: CH, name: 'proj', type: 0 }] }),
     ...over,
   } as unknown as DiscordClient
   return api
@@ -88,7 +88,7 @@ test('createOwnerResolver は担当が変わらなければ route を書き直�
     api: {
       getGuildChannels: async () => {
         writes++
-        return { ok: true as const, value: [{ id: CH, name: 'eagle', type: 0 }] }
+        return { ok: true as const, value: [{ id: CH, name: 'proj', type: 0 }] }
       },
     },
   })
@@ -102,7 +102,7 @@ test('createOwnerResolver は担当が変わらなければ route を書き直�
 
 test('createOwnerResolver は担当が別チャンネルへ移ったら route と guild の宛先を消す', async () => {
   // 担当名に一致するチャンネルが 別 id へ移る (どちらも access.groups にある)
-  let channels = [{ id: CH, name: 'eagle', type: 0 }]
+  let channels = [{ id: CH, name: 'proj', type: 0 }]
   const r = createOwnerResolver({
     api: fakeApi({ getGuildChannels: async () => ({ ok: true, value: channels }) }),
     access: () => ({ allowFrom: [], groups: { [CH]: {}, [OTHER_CH]: {} } }) as Access,
@@ -113,7 +113,7 @@ test('createOwnerResolver は担当が別チャンネルへ移ったら route �
   writeTarget(OWNER, target())
   writeProgressBody(OWNER, THREAD)
 
-  channels = [{ id: OTHER_CH, name: 'eagle', type: 0 }]
+  channels = [{ id: OTHER_CH, name: 'proj', type: 0 }]
   await r.resolve()
   expect(r.channelId()).toBe(OTHER_CH)
   expect(readRoute(OWNER)).toBe(OTHER_CH)
@@ -169,7 +169,7 @@ test('createOwnerResolver は担当が未解決なら route を消す', async ()
 
 test('createOwnerResolver は担当が曖昧なら route を消して警告する', async () => {
   const ambiguous = resolver({
-    api: { getGuildChannels: async () => ({ ok: true, value: [{ id: CH, name: 'eagle', type: 0 }, { id: OTHER_CH, name: 'Eagle', type: 0 }] }) },
+    api: { getGuildChannels: async () => ({ ok: true, value: [{ id: CH, name: 'proj', type: 0 }, { id: OTHER_CH, name: 'Proj', type: 0 }] }) },
     access: () => ({ allowFrom: [], groups: { [CH]: {}, [OTHER_CH]: {} } }),
   })
   writeRoute(OWNER, CH)

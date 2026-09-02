@@ -80,14 +80,14 @@ content 全体から mention を解析するため、コード装飾の内側か
 
 ### 対処: 全送信経路で allowed_mentions を無効化
 
-- `notify.ts` (watch 経由の進捗通知): 投稿 body に `allowed_mentions: { parse: [] }` を指定
-- `server.ts` (reply / edit_message 経路): `allowedMentions: { parse: [] }` を指定 (docs/patch.md パッチ D)
+- `progress-sender.ts` (watch 経由の進捗通知): 投稿 body に `allowed_mentions: { parse: [] }` を指定
+- `reply.ts` (reply / edit_message の take over): 同じく `allowed_mentions: { parse: [] }` を指定 (docs/proxy.md)
 
 これで content に `<@id>` や `@everyone` が含まれても ping は発生しない。なお Discord API 仕様により
 `allowed_mentions` オブジェクトを指定すると `replied_user` も既定 false になるため、引用 reply の相手 ping も
 同時に消える (access.json の `replyToMode: 'off'` 対症療法は不要になる)。
 
-## 関連する既知の知見 (docs/patch.md 側)
+## 関連する既知の知見 (docs/proxy.md 側)
 
 - メッセージ先頭/末尾の ASCII space・NBSP は Discord 側で trim されるが ZWSP は残る
 - 絵文字のみのメッセージは jumbo 化する。絵文字 + ZWSP で抑止できる

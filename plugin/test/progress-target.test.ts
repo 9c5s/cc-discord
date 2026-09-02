@@ -30,7 +30,7 @@ afterEach(() => {
   else process.env.DISCORD_STATE_DIR = savedStateDir
 })
 
-const OWNER = 'eagle'
+const OWNER = 'proj'
 const RUN = 'a'.repeat(32)
 const ACT = 'b'.repeat(32)
 const OTHER_ACT = 'c'.repeat(32)

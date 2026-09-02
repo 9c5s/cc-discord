@@ -1,75 +1,18 @@
-// Claude Code の statusLine コマンドをラップする tee スクリプト
-// stdin の statusline JSON を stateDir に保存し 整形済みステータスブロック (.txt) を生成した上で
-// 本来の statusline コマンドへパススルーする
-// .txt は discord プラグイン server.ts (patch) が
-// reply 末尾に付与するために読む
-// 整形ロジックは status.ts に置き patch 側を最小に保つ
+// 互換 shim
+// global settings.json の statusLine が指す symlink の参照先である
+// footer は proxy が transcript と使用量キャッシュから組み立てるようになり tee による保存は不要になった
+// 移行手順で statusLine を本来のコマンドへ戻した後 次のリリースでこのファイルを削除する
+// ここでは stdin をそのまま本来のコマンドへ渡すだけにする
 // 使い方: bun statusline-tee.ts <本来のコマンド> [args...]
 import { spawn } from 'child_process'
-import { mkdirSync, writeFileSync, renameSync } from 'fs'
-import { join } from 'path'
-import { stateDir } from './routes'
-import { ownerFromDir } from './normalize'
-import { buildStatusBlock, modelUsageSuffix, readBranch } from './status'
-import { ensureFresh, readCachedUsage, withCachedWeekly } from './usage'
 
 const raw = await new Response(Bun.stdin.stream()).text()
 
-// statusline JSON からプロジェクトディレクトリを解決する
-function projectDir(data: Record<string, unknown>): string {
-  const ws = data.workspace
-  const pd = (typeof ws === 'object' && ws !== null)
-    ? (ws as Record<string, unknown>).project_dir
-    : undefined
-  return typeof pd === 'string' && pd ? pd : (typeof data.cwd === 'string' ? data.cwd : '')
-}
-
-
-// 同時読み取りに壊れたファイルを見せないため一時ファイル経由で置き換える
-// 同じ owner の tee が並走しても衝突しないよう一時名に PID を含める
-function writeAtomic(path: string, content: string): void {
-  const tmp = `${path}.${process.pid}.tmp`
-  writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 })
-  renameSync(tmp, path)
-}
-
-// JSON 保存と整形済みブロック生成
-// 失敗しても statusline 表示は止めない
-try {
-  const data = JSON.parse(raw) as Record<string, unknown>
-  const pd = projectDir(data)
-  const owner = pd ? ownerFromDir(pd) : ''
-  if (owner) {
-    const dir = join(stateDir(), 'statusline')
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    writeAtomic(join(dir, `${owner}.json`), raw)
-    // モデル別枠のキャッシュが古ければ更新を別プロセスへ依頼する (結果は次回に反映する)
-    ensureFresh()
-    // 7d 全体とモデル別枠は同じ読み取り結果から導出する
-    // 別々に読むと更新の子プロセスが間に割り込んだとき時点の違う値が並ぶ
-    const usage = readCachedUsage()
-    writeAtomic(
-      join(dir, `${owner}.txt`),
-      buildStatusBlock(
-        withCachedWeekly(data, usage.weekly),
-        readBranch(pd),
-        modelUsageSuffix(usage.modelScoped),
-      ),
-    )
-  }
-} catch (err) {
-  // 保存失敗は無視して表示を優先するが DEBUG 設定時は診断を出す
-  if (process.env.DISCORD_NOTIFY_DEBUG) {
-    process.stderr.write(`[statusline-tee] save error: ${(err as Error).message}\n`)
-  }
-}
-
-// 本来の statusline コマンドへパススルーする
 const cmd = process.argv[2]
 if (cmd) {
   const child = spawn(cmd, process.argv.slice(3), { stdio: ['pipe', 'inherit', 'inherit'] })
 
-  // ラップ先コマンドが見つからない場合 (ENOENT) や他のエラーで tee が落ちるのを防ぐ
+  // ラップ先コマンドが見つからない場合 (ENOENT) や他のエラーで shim が落ちるのを防ぐ
   child.on('error', (err) => {
     process.stderr.write(`[statusline-tee] passthrough failed: ${(err as Error).message}\n`)
     process.exit(1)

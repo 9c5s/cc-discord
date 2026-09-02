@@ -21,7 +21,7 @@ afterEach(() => {
   else process.env.DISCORD_STATE_DIR = savedStateDir
 })
 
-const OWNER = 'eagle'
+const OWNER = 'proj'
 const CH = '33333333333333333'
 const BOT = '55555555555555555'
 const GUILD = '11111111111111111'

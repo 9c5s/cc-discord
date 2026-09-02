@@ -1,4 +1,9 @@
-// SessionEnd hook. このセッションの transcript を監視している watch を停止する
+// 互換 shim
+// global settings.json の SessionEnd hook が指す symlink の参照先であり
+// 移行前から動いている旧セッションの watcher (watch-<owner>.pid) を止めるためだけに残す
+// 新しい watcher は pid ファイルを持たず heartbeat と activation の一致で自律終了するため ここでは関与しない
+// 移行手順で旧 watcher の不在を確認した後 次のリリースでこのファイルを削除する
+//
 // stdin の JSON から transcript_path を読み pidFile のプロセスのコマンドラインに
 // その transcript が含まれる場合のみ SIGTERM を送る
 // 別セッションに takeover 済みの watcher (コマンドラインの transcript が異なる) は巻き込まない

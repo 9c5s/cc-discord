@@ -364,3 +364,19 @@ test('429 以外の失敗は再送しない', async () => {
   expect(await s.send('x')).toBe('dropped')
   expect(calls).toBe(1)
 })
+
+test('429 の待ち時間が上限を超えるなら待たずに諦める', async () => {
+  setupActive()
+  let calls = 0
+  const s = sender({
+    api: {
+      createMessage: async () => {
+        calls++
+        return { ok: false as const, error: 'rate limited', retryAfterMs: 60_000 }
+      },
+    },
+  })
+  expect(await s.send('x')).toBe('dropped')
+  expect(s.waits).toEqual([])
+  expect(calls).toBe(1)
+})

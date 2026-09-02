@@ -71,14 +71,33 @@ test('429 は retry_after を待って 1 回だけ再送する', async () => {
   expect(waits).toEqual([1500])
 })
 
-test('429 の待機は 5 秒を上限にする', async () => {
+test('429 の待機が上限を超えるなら待たずに失敗を返す', async () => {
   const waits: number[] = []
-  const { api } = client(
+  const { api, calls } = client(
     [{ status: 429, json: { retry_after: 30 } }, { json: { id: CH } }],
     { sleep: async (ms: number) => void waits.push(ms) },
   )
+  const res = await api.getChannel(CH)
+  expect(res.ok).toBe(false)
+  expect(res.ok === false && res.retryAfterMs).toBe(30000)
+  expect(waits).toEqual([])
+  expect(calls).toHaveLength(1)
+})
+
+test('429 の retry_after を切り詰めずに返す', async () => {
+  const { api } = client([{ status: 429, json: { retry_after: 90 } }])
+  const res = await api.createMessage(CH, { content: 'x' }, undefined, { autoRetry: false })
+  expect(res.ok === false && res.retryAfterMs).toBe(90000)
+})
+
+test('429 の retry_after が数値として読めなければ 1 秒として扱う', async () => {
+  const waits: number[] = []
+  const { api } = client(
+    [{ status: 429, json: { retry_after: -1 } }, { json: { id: CH, type: 0 } }],
+    { sleep: async (ms: number) => void waits.push(ms) },
+  )
   await api.getChannel(CH)
-  expect(waits).toEqual([5000])
+  expect(waits).toEqual([1000])
 })
 
 test('autoRetry を切ると 429 で再送せず待ち時間を返す', async () => {

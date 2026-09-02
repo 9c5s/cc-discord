@@ -9,7 +9,10 @@ import type { Channel, ChannelEntity } from './routing'
 
 const API = 'https://discord.com/api/v10'
 const TIMEOUT_MS = 15_000
-const MAX_RETRY_WAIT_MS = 5_000
+// 自動再送で待てる上限 (これを超える待ちは再送せず呼び出し側の判断に委ねる)
+// retry_after より早く再送すると 429 を積み増して無効リクエスト制限に触れる
+// https://docs.discord.com/developers/topics/rate-limits
+const MAX_AUTO_RETRY_WAIT_MS = 5_000
 // チャンネル実体と guild 情報のキャッシュ
 // proxy の担当解決 (60 秒周期) と watcher の gate で同じ鮮度にする
 const CACHE_TTL_MS = 60_000
@@ -59,6 +62,8 @@ export function createDiscordClient(opts: ClientOptions = {}): DiscordClient {
   const cache = new Map<string, { at: number; value: unknown }>()
 
   // 429 の待ち時間を応答から決める (本文の retry_after 秒 なければ Retry-After ヘッダ)
+  // 公式が指定した待ち時間はそのまま返す (短く丸めた再送は仕様違反である)
+  // 読めない値と負の値だけ 1 秒に倒す
   const retryWaitMs = async (res: Response): Promise<number> => {
     let sec = 1
     try {
@@ -68,7 +73,8 @@ export function createDiscordClient(opts: ClientOptions = {}): DiscordClient {
       const header = parseFloat(res.headers.get('Retry-After') ?? '1')
       if (!Number.isNaN(header)) sec = header
     }
-    return Math.min(sec * 1000, MAX_RETRY_WAIT_MS)
+    if (!Number.isFinite(sec) || sec < 0) sec = 1
+    return sec * 1000
   }
 
   async function request<T>(path: string, init: RequestInit = {}, send?: SendOptions): Promise<ApiResult<T>> {
@@ -90,6 +96,9 @@ export function createDiscordClient(opts: ClientOptions = {}): DiscordClient {
     if (res.status === 429) {
       const waitMs = await retryWaitMs(res)
       if (send?.autoRetry === false) return { ok: false, error: 'rate limited', retryAfterMs: waitMs }
+      if (waitMs > MAX_AUTO_RETRY_WAIT_MS) {
+        return { ok: false, error: `rate limited for ${Math.round(waitMs)}ms`, retryAfterMs: waitMs }
+      }
       await sleep(waitMs)
       const retry = await doSend()
       if (typeof retry === 'string') return { ok: false, error: retry }

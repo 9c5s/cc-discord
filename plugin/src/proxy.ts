@@ -132,7 +132,7 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
 
   const params = (msg.params ?? {}) as Json
   const meta = (params.meta ?? {}) as Json
-  const decision = classifyInbound(ctx.ownerCtx, meta)
+  const decision = classifyInbound(ctx.ownerCtx, meta, (ctx.now ?? Date.now)())
   if (decision.action === 'passthrough') {
     ctx.toClient.write(raw)
     return
@@ -160,7 +160,6 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
     ctx.log(`inbound dropped: lock is held message=${messageId}`)
     return
   }
-  sweepInboundLocks(owner)
 
   // ここから先は best effort である (失敗しても通知は転送する)
   try {
@@ -402,6 +401,9 @@ function main(): void {
   const resolveTimer = setInterval(() => {
     void resolver.resolve().then(() => {
       ensureFresh()
+      // 残置ロックの掃除は inbound の処理から外してここでまとめて行う
+      // 12 時間分のロックを毎回走査すると 通知 1 件あたりの処理が重くなるためである
+      if (owner) sweepInboundLocks(owner)
     })
   }, RESOLVE_MS)
   resolveTimer.unref?.()

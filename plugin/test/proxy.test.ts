@@ -40,9 +40,10 @@ const THREAD = '44444444444444444'
 const ANCHOR = '88888888888888888'
 const DM_CH = '77777777777777777'
 const FOREIGN = '55555555555555555'
-const MSG = '99999999999999999'
 const USER = '258152380355444736'
 const NOW = 1_800_000_000_000
+// NOW ちょうどに送られたメッセージの snowflake (通知は鮮度も判定される)
+const MSG = String(BigInt(NOW - 1_420_070_400_000) << 22n)
 
 const ACCESS: Access = { allowFrom: [USER], groups: { [CH]: {} } }
 

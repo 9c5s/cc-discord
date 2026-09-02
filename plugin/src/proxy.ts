@@ -1,150 +1,287 @@
 #!/usr/bin/env bun
-// cc-discord 透過プロキシ (spike 段階)
-// Claude Code と公式 discord channel server (server.ts) の間に入り stdio の JSON-RPC を中継する
-// 公式 server は無改変のまま子プロセスとして起動し 差し込みたい振る舞いは MCP 境界と
-// Discord REST で実現する 現段階の範囲は次の 3 点である
-//   1. 双方向の行単位中継 (MCP stdio は改行区切り JSON-RPC)
-//   2. server -> client の inbound 通知 (notifications/claude/channel) を検知して typing を継続送信する
-//   3. client -> server の reply ツール呼び出しで typing を停止する
-
 import { spawn } from 'child_process'
 import { appendFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
-import { StringDecoder } from 'string_decoder'
+import { createAccessReader, type Access } from './access'
+import { currentActivation, deleteHeartbeat, deletePointer, readPointer, writeHeartbeat } from './activation'
+import { createDiscordClient, type DiscordClient } from './discord-api'
+import { buildFooter } from './footer'
+import {
+  acquireInboundLock,
+  createProgressTarget,
+  createTypingController,
+  sweepInboundLocks,
+  type TypingController,
+} from './inbound'
 import { botToken, ownerName } from './notify'
-import { officialPluginDir } from './official'
+import { inspectOfficial, officialPluginDir } from './official'
+import { createOwnerResolver } from './owner-resolver'
+import { deleteTarget, listTargets, writeProgressBody, writeTarget } from './progress-target'
+import { createWriter, readJsonLines, type Json, type Writer } from './relay'
+import { handleEditMessage, handleReply } from './reply'
 import { stateDir } from './routes'
+import { classifyInbound, decideDelivery, ownerContext, type OwnerContext } from './routing'
+import { archiveStaleThreads } from './stale-threads'
+import { ensureFresh } from './usage'
 
-const API = 'https://discord.com/api/v10'
-const TYPING_RESEND_MS = 8_000
-const TYPING_MAX_MS = 10 * 60_000
+// cc-discord 透過プロキシ ---
+// Claude Code と公式 discord channel server の間に入り stdio の JSON-RPC を中継する
+// 公式 server は無改変のまま子プロセスとして起動し 差し込みたい振る舞いは MCP 境界と Discord REST で実現する
+// 起動する server.ts が対応表に無ければ子を起動せず終了する (対応外のまま中継だけ続けることはしない)
 
-type Json = Record<string, unknown>
+// heartbeat の書き込み間隔 (watcher は 15 秒の鮮度で見る)
+const HEARTBEAT_MS = 5_000
+// 担当チャンネルの解決周期
+const RESOLVE_MS = 60_000
+// 滞留スレッドの archive 周期
+const ARCHIVE_MS = 5 * 60_000
+// 現行 activation のポインタを読み直すまでの待ち (hook の書き込みが MCP の初期化より遅れる場合の吸収)
+const POINTER_RETRY_MS = 500
+// 子プロセスの終了を待つ上限
+const CHILD_EXIT_WAIT_MS = 5_000
 
-// 観測用ログ (spike 段階では常時出力する)
-// stateDir/logs/proxy-<owner>.log へ追記し 失敗しても本体を止めない
-function log(msg: string): void {
-  try {
-    const dir = join(stateDir(), 'logs')
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    appendFileSync(join(dir, `proxy-${ownerName() || 'unknown'}.log`), `[${new Date().toISOString()}] ${msg}\n`, { mode: 0o600 })
-  } catch {
-    // ログ失敗は無視する
+// ログ
+// エラーと起動拒否は常時 詳細は DISCORD_NOTIFY_DEBUG のときだけ記録する
+export function createLogger(owner: string): (msg: string) => void {
+  return (msg: string): void => {
+    try {
+      const dir = join(stateDir(), 'logs')
+      mkdirSync(dir, { recursive: true, mode: 0o700 })
+      appendFileSync(join(dir, `proxy-${owner || 'unknown'}.log`), `[${new Date().toISOString()}] ${msg}\n`, { mode: 0o600 })
+    } catch {
+      // ログ失敗は本体を止めない
+    }
   }
 }
 
-// typing 継続 ---
-// Discord の typing は約 10 秒で消えるため 8 秒毎に再送し reply で止める
-// 安全弁として 10 分で必ず止める
-type TypingState = { timer: ReturnType<typeof setInterval>; guard: ReturnType<typeof setTimeout> }
-const typing = new Map<string, TypingState>()
+// initialize 応答の書き換え ---
+// 子へ転送した initialize 要求の id を 1 件だけ覚え 最初に来た同じ id の応答で instructions を書き換える
+// 応答の後に同じ id が別の要求へ再利用されても書き換えない
+export type InitializeRewriter = {
+  noteRequest(msg: Json): void
+  rewrite(msg: Json): Json
+}
 
-async function sendTyping(chatId: string): Promise<void> {
-  const t = botToken()
-  if (!t) {
-    log('typing skip: no token')
+export function createInitializeRewriter(): InitializeRewriter {
+  let pendingId: unknown = undefined
+  let pending = false
+
+  return {
+    noteRequest(msg: Json): void {
+      if (msg.method !== 'initialize' || msg.id === undefined) return
+      pendingId = msg.id
+      pending = true
+    },
+    rewrite(msg: Json): Json {
+      if (!pending || msg.id !== pendingId) return msg
+      const result = msg.result
+      if (typeof result !== 'object' || result === null) return msg
+      const instructions = (result as Json).instructions
+      if (typeof instructions !== 'string') return msg
+      pending = false
+      // 公式の案内する skill 名を このプラグインが同梱する名前へ差し替える
+      const rewritten = instructions.replace(/\/discord:(access|configure)/g, '/cc-discord:$1')
+      return { ...msg, result: { ...(result as Json), instructions: rewritten } }
+    },
+  }
+}
+
+// 中継のコンテキスト ---
+
+export type ProxyContext = {
+  rewriter: InitializeRewriter
+  ownerCtx: OwnerContext
+  api: DiscordClient
+  access: () => Access
+  ownerChannelId: () => string | null
+  typing: TypingController
+  claudePid: number
+  runId: string | null
+  toClient: Writer
+  toChild: Writer
+  footer: () => string
+  log: (msg: string) => void
+  now?: () => number
+  sleep?: (ms: number) => Promise<void>
+}
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+// 現行 activation を解決する
+// ポインタが無ければ 1 回だけ読み直す (hook と MCP の初期化の順序に依存しないため)
+async function resolveActivation(ctx: ProxyContext): Promise<{ sessionId: string; activationId: string } | null> {
+  if (!ctx.runId) return null
+  const sleep = ctx.sleep ?? defaultSleep
+  let p = currentActivation(ctx.claudePid, ctx.runId)
+  if (!p) {
+    await sleep(POINTER_RETRY_MS)
+    p = currentActivation(ctx.claudePid, ctx.runId)
+  }
+  if (!p) return null
+  return { sessionId: p.session_id, activationId: p.activation_id }
+}
+
+// server -> client ---
+// 通知の処理は 判定段階 (失敗したら破棄) と best effort 段階 (失敗してもログを残して転送) に分ける
+export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyContext): Promise<void> {
+  if (msg.method !== 'notifications/claude/channel') {
+    ctx.toClient.write(JSON.stringify(ctx.rewriter.rewrite(msg)))
     return
   }
-  try {
-    const res = await fetch(`${API}/channels/${chatId}/typing`, {
-      method: 'POST',
-      headers: { Authorization: `Bot ${t}` },
-      signal: AbortSignal.timeout(10_000),
-    })
-    if (!res.ok) log(`typing http error status=${res.status}`)
-  } catch (e) {
-    log(`typing fetch failed: ${e}`)
+
+  const params = (msg.params ?? {}) as Json
+  const meta = (params.meta ?? {}) as Json
+  const decision = classifyInbound(ctx.ownerCtx, meta)
+  if (decision.action === 'passthrough') {
+    ctx.toClient.write(raw)
+    return
   }
-}
+  if (decision.action === 'drop') {
+    ctx.log(`inbound dropped: ${decision.reason}`)
+    return
+  }
 
-function startTyping(chatId: string): void {
-  if (typing.has(chatId)) return
-  void sendTyping(chatId)
-  const timer = setInterval(() => void sendTyping(chatId), TYPING_RESEND_MS)
-  timer.unref?.()
-  const guard = setTimeout(() => clearTyping(chatId), TYPING_MAX_MS)
-  guard.unref?.()
-  typing.set(chatId, { timer, guard })
-  log(`typing start chat=${chatId}`)
-}
+  const { owner, chatId, messageId } = decision
+  const channel = await ctx.api.getChannel(chatId)
+  const delivery = decideDelivery({
+    owner,
+    ownerChannelId: ctx.ownerChannelId(),
+    chatId,
+    entity: channel.ok ? channel.value : null,
+  })
+  if (delivery.action === 'drop') {
+    ctx.log(`inbound dropped: ${delivery.reason} chat=${chatId}`)
+    return
+  }
 
-function clearTyping(chatId: string): void {
-  const s = typing.get(chatId)
-  if (!s) return
-  clearInterval(s.timer)
-  clearTimeout(s.guard)
-  typing.delete(chatId)
-  log(`typing stop chat=${chatId}`)
-}
+  // 同じ inbound を複数のセッションが処理しないよう wx で 1 プロセスに絞る
+  if (!acquireInboundLock(owner, messageId)) {
+    ctx.log(`inbound dropped: lock is held message=${messageId}`)
+    return
+  }
+  sweepInboundLocks(owner)
 
-// 行単位の中継 ---
-// 1 行 = 1 JSON-RPC メッセージとして解析し handler に渡す
-// handler が null を返した行は破棄し それ以外は元の行をそのまま書き出す (バイト列を保存する)
-// JSON として解析できない行は無条件で素通しする
-export type LineHandler = (msg: Json) => Json | null
+  // ここから先は best effort である (失敗しても通知は転送する)
+  try {
+    ctx.typing.start(chatId)
+    const content = typeof params.content === 'string' ? params.content : ''
+    const location = await createProgressTarget(ctx.api, {
+      chatId,
+      kind: delivery.kind,
+      parentId: delivery.parentId,
+      content,
+      ts: new Date(),
+    })
+    writeProgressBody(owner, location.id)
 
-export function relayLines(
-  src: NodeJS.ReadableStream,
-  dst: NodeJS.WritableStream,
-  handler: LineHandler,
-): void {
-  const decoder = new StringDecoder('utf8')
-  let buf = ''
-  src.on('data', (chunk: Buffer) => {
-    buf += decoder.write(chunk)
-    let i: number
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i)
-      buf = buf.slice(i + 1)
-      if (!line.trim()) continue
-      let msg: Json
-      try {
-        msg = JSON.parse(line) as Json
-      } catch {
-        dst.write(`${line}\n`)
-        continue
-      }
-      const out = handler(msg)
-      if (out === null) continue
-      dst.write(out === msg ? `${line}\n` : `${JSON.stringify(out)}\n`)
+    const activation = await resolveActivation(ctx)
+    if (activation) {
+      writeTarget(owner, {
+        ...location,
+        session_id: activation.sessionId,
+        run_id: ctx.runId as string,
+        activation_id: activation.activationId,
+        message_id: messageId,
+        written_at: (ctx.now ?? Date.now)(),
+      })
+    } else {
+      ctx.log('no current activation: the progress target was not written')
     }
+  } catch (e) {
+    ctx.log(`inbound side effects failed: ${e}`)
+  }
+
+  ctx.toClient.write(raw)
+}
+
+// client -> server ---
+// take over 対象は子へ送らず proxy が処理する
+// 応答は元の id を型ごと保ち 1 回だけ返す
+export function handleClientMessage(msg: Json, raw: string, ctx: ProxyContext): void | Promise<void> {
+  if (msg.method === 'initialize') {
+    ctx.rewriter.noteRequest(msg)
+    ctx.toChild.write(raw)
+    return
+  }
+  if (msg.method !== 'tools/call') {
+    ctx.toChild.write(raw)
+    return
+  }
+
+  const params = (msg.params ?? {}) as Json
+  const name = params.name
+  if (name !== 'reply' && name !== 'edit_message') {
+    ctx.toChild.write(raw)
+    return
+  }
+  // 応答先の無い要求 (通知) には応答できないため そのまま捨てる
+  if (msg.id === undefined) {
+    ctx.log(`take over skipped: ${String(name)} has no id`)
+    return
+  }
+
+  const args = (params.arguments ?? {}) as Record<string, unknown>
+  const deps = {
+    api: ctx.api,
+    access: ctx.access,
+    footer: ctx.footer,
+    stopTyping: (chatId: string) => ctx.typing.stop(chatId),
+  }
+  const run = name === 'reply' ? handleReply(args, deps) : handleEditMessage(args, deps)
+  return run.then((result) => {
+    ctx.toClient.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }))
   })
 }
 
-// server -> client: inbound 通知を検知して typing を始める
-function fromServer(msg: Json): Json | null {
-  if (msg.method === 'notifications/claude/channel') {
-    const meta = ((msg.params as Json | undefined)?.meta ?? {}) as Json
-    const chatId = typeof meta.chat_id === 'string' ? meta.chat_id : null
-    log(`inbound message_id=${String(meta.message_id ?? '')} chat=${chatId ?? ''}`)
-    if (chatId) startTyping(chatId)
-  } else if (msg.id !== undefined && (msg.result as Json | undefined)?.capabilities !== undefined) {
-    const caps = (msg.result as Json).capabilities as Json
-    log(`initialize result experimental=${JSON.stringify(caps.experimental ?? null)}`)
-  }
-  return msg
-}
-
-// client -> server: reply ツール呼び出しで typing を止める
-function fromClient(msg: Json): Json | null {
-  if (msg.method === 'tools/call') {
-    const params = (msg.params ?? {}) as Json
-    const args = (params.arguments ?? {}) as Json
-    log(`tools/call name=${String(params.name)}`)
-    if (params.name === 'reply' && typeof args.chat_id === 'string') clearTyping(args.chat_id)
-  }
-  return msg
-}
+// 配線 ---
 
 function main(): void {
   // 検証用の上書き: セッションの起動ディレクトリとは別の担当名で子 server を動かす
-  // (spike 段階で公式プラグインの server と担当を分けて競合させないための仕掛け)
   const override = process.env.CC_DISCORD_PROJECT_DIR
   if (override) process.env.CLAUDE_PROJECT_DIR = override
-  const dir = officialPluginDir()
-  log(`start pid=${process.pid} owner=${ownerName() || '(none)'} official=${dir}`)
-  // 公式 .mcp.json と同じ起動コマンドで server.ts を子プロセスにする
-  const child = spawn(process.execPath, ['run', '--cwd', dir, '--shell=bun', '--silent', 'start'], {
+
+  const owner = ownerName()
+  const log = createLogger(owner)
+  const runId = process.env.CC_DISCORD_RUN_ID ?? null
+  const claudePid = process.ppid
+
+  // 対応版判定 (通らなければ子を起動せず heartbeat も書かない)
+  let installPath: string
+  try {
+    installPath = officialPluginDir()
+  } catch (e) {
+    log(`refusing to start: ${(e as Error).message}`)
+    process.stderr.write(`cc-discord: ${(e as Error).message}\n`)
+    process.exit(1)
+  }
+  const official = inspectOfficial(installPath)
+  if (!official.supported) {
+    const detail = `unsupported server.ts (version ${official.version}, hash ${official.execHash ?? 'unreadable'})`
+    log(`refusing to start: ${detail}`)
+    process.stderr.write(`cc-discord: ${detail}\n`)
+    process.exit(1)
+  }
+
+  if (!runId) log('CC_DISCORD_RUN_ID is not set: progress forwarding is disabled')
+  if (!botToken()) log('no bot token: REST calls will fail')
+
+  // heartbeat は対応版判定を通った後に 1 回書いてからタイマーを始める
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  if (runId) {
+    writeHeartbeat(claudePid, runId)
+    heartbeatTimer = setInterval(() => void writeHeartbeat(claudePid, runId), HEARTBEAT_MS)
+    heartbeatTimer.unref?.()
+  }
+
+  const api = createDiscordClient()
+  const access = createAccessReader()
+  const ownerCtx = ownerContext()
+  const resolver = createOwnerResolver({ api, access, owner, log })
+  const typing = createTypingController(api, { onError: log })
+
+  log(`start pid=${process.pid} ppid=${claudePid} owner=${owner || '(none)'} official=${installPath}`)
+
+  const child = spawn(process.execPath, ['run', '--cwd', installPath, '--shell=bun', '--silent', 'start'], {
     stdio: ['pipe', 'pipe', 'inherit'],
     windowsHide: true,
   })
@@ -152,30 +289,137 @@ function main(): void {
     log(`child spawn failed: ${e.message}`)
     process.exit(1)
   })
+  // 子が先に終了したら Claude Code に切断を検知させるため同じ終了コードで終わる
   child.on('exit', (code, signal) => {
     log(`child exit code=${code} signal=${signal}`)
+    cleanup()
     process.exit(code ?? (signal === null ? 0 : 1))
   })
-  // 子が先に終了した際の EPIPE で異常終了しないようにする
   child.stdin.on('error', () => {})
-  process.stdout.on('error', () => process.exit(0))
 
-  relayLines(child.stdout, process.stdout, fromServer)
-  relayLines(process.stdin, child.stdin, fromClient)
+  const toChild = createWriter(child.stdin, () => {
+    log('child stdin is broken')
+    shutdown()
+  })
+  const toClient = createWriter(process.stdout, () => {
+    log('client stdout is broken')
+    shutdown()
+  })
 
-  // Claude Code が接続を閉じたら子にも EOF を伝えて Gateway を切らせる
+  const ctx: ProxyContext = {
+    rewriter: createInitializeRewriter(),
+    ownerCtx,
+    api,
+    access,
+    ownerChannelId: () => resolver.channelId(),
+    typing,
+    claudePid,
+    runId,
+    toClient,
+    toChild,
+    footer: () => {
+      const pointer = runId ? currentActivation(claudePid, runId) : null
+      ensureFresh()
+      return buildFooter({
+        transcriptPath: pointer?.transcript_path ?? null,
+        ownerDir: ownerCtx.kind === 'none' ? null : ownerCtx.dir,
+      })
+    },
+    log,
+  }
+
+  readJsonLines(child.stdout, {
+    onMessage: (msg, raw) => handleServerMessage(msg, raw, ctx),
+    onInvalid: (line) => process.stderr.write(`cc-discord: dropping a non JSON line from the child: ${line.slice(0, 200)}\n`),
+    onEnd: () => shutdown(),
+  })
+  readJsonLines(process.stdin, {
+    // take over の完了は待たず 後続メッセージの転送を止めない
+    onMessage: (msg, raw) => void handleClientMessage(msg, raw, ctx),
+    onInvalid: (line) => log(`dropping a non JSON line from the client: ${line.slice(0, 200)}`),
+    onEnd: () => shutdown(),
+  })
+
+  // 担当解決と archive の周期
+  const resolveTimer = setInterval(() => {
+    void resolver.resolve().then(() => {
+      ensureFresh()
+    })
+  }, RESOLVE_MS)
+  resolveTimer.unref?.()
+  const archiveTimer = setInterval(() => void archive(), ARCHIVE_MS)
+  archiveTimer.unref?.()
+
+  async function archive(): Promise<void> {
+    const guildId = resolver.guildId()
+    const channelId = resolver.channelId()
+    if (!guildId || !channelId || !owner) return
+    const me = await api.getCurrentUser()
+    if (!me.ok) return
+    const archived = await archiveStaleThreads(api, { owner, guildId, ownerChannelId: channelId, botId: me.value.id })
+    if (archived.length > 0) log(`archived ${archived.length} stale thread(s)`)
+  }
+
+  void resolver.resolve().then(archive)
+
+  // 終了処理 ---
+  let cleaned = false
+  function cleanup(): void {
+    if (cleaned) return
+    cleaned = true
+    typing.stopAll()
+    if (heartbeatTimer) clearInterval(heartbeatTimer)
+    clearInterval(resolveTimer)
+    clearInterval(archiveTimer)
+    if (!runId) return
+    // 自分の run のものだけを片付ける (異常終了で残っても heartbeat は 15 秒 宛先は 12 時間で失効する)
+    deleteHeartbeat(claudePid, runId)
+    if (readPointer(claudePid)?.run_id === runId) deletePointer(claudePid)
+    if (!owner) return
+    for (const entry of listTargets(owner)) {
+      if (entry.target.run_id === runId) deleteTarget(owner, entry.activationId)
+    }
+  }
+
   let shuttingDown = false
-  const shutdown = (): void => {
+  function shutdown(): void {
     if (shuttingDown) return
     shuttingDown = true
-    log('stdin closed, shutting down')
-    child.stdin.end()
-    setTimeout(() => process.exit(0), 3_000).unref?.()
+    log('shutting down')
+    cleanup()
+    try {
+      child.stdin.end()
+    } catch {
+      // 既に閉じている場合は無視する
+    }
+    const timer = setTimeout(() => {
+      child.kill()
+      process.exit(0)
+    }, CHILD_EXIT_WAIT_MS)
+    timer.unref?.()
   }
-  process.stdin.on('end', shutdown)
-  process.stdin.on('close', shutdown)
-  process.on('SIGTERM', () => child.kill())
-  process.on('SIGINT', () => child.kill())
+
+  for (const sig of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(sig, () => {
+      log(`received ${sig}`)
+      cleanup()
+      child.kill(sig)
+      shutdown()
+    })
+  }
+  // 判定を担う proxy が不明な状態のまま中継を続けない
+  process.on('uncaughtException', (e) => {
+    log(`uncaught exception: ${e.stack ?? e.message}`)
+    cleanup()
+    child.kill()
+    process.exit(1)
+  })
+  process.on('unhandledRejection', (reason) => {
+    log(`unhandled rejection: ${String(reason)}`)
+    cleanup()
+    child.kill()
+    process.exit(1)
+  })
 }
 
 if (import.meta.main) main()

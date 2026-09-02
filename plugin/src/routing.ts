@@ -95,7 +95,7 @@ export const INBOUND_MAX_SKEW_MS = 5 * 60 * 1000
 export type Freshness = 'fresh' | 'TOO_OLD' | 'TOO_NEW' | 'INVALID_ID'
 
 // 通知の鮮度を message_id の生成時刻で見る
-// ロックを取る前と取った後の 2 回使う (取得を待つ間に鮮度が切れることがある)
+// 実体を取る前と配送の直前の 2 回使う (準備を待つ間に鮮度が切れることがある)
 export function inboundFreshness(messageId: unknown, now: number = Date.now()): Freshness {
   const sentAt = snowflakeTime(messageId)
   if (sentAt === null) return 'INVALID_ID'

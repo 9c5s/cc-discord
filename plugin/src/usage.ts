@@ -19,22 +19,26 @@ export type ModelUsageEntry = {
   resets_at: number | null
 }
 
-// 7d 全体のバケット (statusline JSON の rate_limits.seven_day と同じ形)
-export type WeeklyBucket = {
+// 使用量の 1 バケット (statusline JSON の rate_limits.five_hour / seven_day と同じ形)
+export type RateBucket = {
   used_percentage: number
   resets_at: number
 }
 
-// 一時点の週次の使用状況 (7d 全体とモデル別枠の組)
+// 一時点の使用状況 (5h と 7d 全体とモデル別枠の組)
 // API 応答からもキャッシュからも常にこの組で受け渡し 表示時点を揃える
 export type UsageSnapshot = {
-  weekly: WeeklyBucket | null
+  weekly: RateBucket | null
+  session: RateBucket | null
   modelScoped: ModelUsageEntry[]
 }
 
 const API_URL = 'https://api.anthropic.com/api/oauth/usage'
 const API_TIMEOUT_MS = 5_000
-const TTL_SEC = 300 // キャッシュの保持時間
+// キャッシュの保持時間
+// reply の footer は inbound と reply のたびに ensureFresh を呼ぶ経路になったため
+// statusline 経由で毎描画更新していた頃より短くして鮮度を保つ
+const TTL_SEC = 60
 const RETRY_SEC = 60 // 取得失敗時に再試行を抑制する間隔
 const STALE_SEC = 900 // この時間を超えて更新できていないキャッシュは表示に使わない
 
@@ -95,11 +99,12 @@ function toEntry(item: unknown): ModelUsageEntry | null {
   }
 }
 
-// limits 配列の1要素を 7d 全体のバケットへ変換する
-// kind が weekly_all の要素だけを対象とし リセット時刻が無いものは表示できないため除く
-function toWeeklyBucket(item: unknown): WeeklyBucket | null {
+// limits 配列の1要素を指定した種類のバケットへ変換する
+// 7d 全体は kind が weekly_all 5h は kind が session の要素を対象とし
+// リセット時刻が無いものは表示できないため除く
+function toRateBucket(item: unknown, kind: string): RateBucket | null {
   const o = obj(item)
-  if (!o || o.kind !== 'weekly_all') return null
+  if (!o || o.kind !== kind) return null
   const percent = num(o.percent)
   const iso = typeof o.resets_at === 'string' ? Date.parse(o.resets_at) : Number.NaN
   if (percent === null || !Number.isFinite(iso)) return null
@@ -119,19 +124,21 @@ export async function fetchUsageSnapshot(
     })
     if (!res.ok) return null
     const limits = obj(await res.json())?.limits
-    if (!Array.isArray(limits)) return { weekly: null, modelScoped: [] }
+    if (!Array.isArray(limits)) return { weekly: null, session: null, modelScoped: [] }
 
-    let weekly: WeeklyBucket | null = null
+    let weekly: RateBucket | null = null
+    let session: RateBucket | null = null
     const modelScoped: ModelUsageEntry[] = []
     for (const item of limits) {
       const entry = toEntry(item)
       if (entry !== null) {
         modelScoped.push(entry)
-      } else if (weekly === null) {
-        weekly = toWeeklyBucket(item)
+        continue
       }
+      weekly ??= toRateBucket(item, 'weekly_all')
+      session ??= toRateBucket(item, 'session')
     }
-    return { weekly, modelScoped }
+    return { weekly, session, modelScoped }
   } catch {
     return null
   }
@@ -150,8 +157,8 @@ function toStoredEntries(data: unknown): ModelUsageEntry[] {
   return data.map(toStoredEntry).filter((e): e is ModelUsageEntry => e !== null)
 }
 
-// キャッシュの weekly を 7d 全体のバケットへ変換する
-function toStoredWeekly(value: unknown): WeeklyBucket | null {
+// キャッシュに保存済みのバケットを読み戻す
+function toStoredBucket(value: unknown): RateBucket | null {
   const w = obj(value)
   if (!w) return null
   const percent = num(w.used_percentage)
@@ -166,8 +173,12 @@ function toStoredWeekly(value: unknown): WeeklyBucket | null {
 // 古すぎるキャッシュは両方とも捨てる (片方だけ古い値を混ぜないため)
 export function readCachedUsage(path = usageCachePath()): UsageSnapshot {
   const cache = readCache(path)
-  if (!isFresh(cache)) return { weekly: null, modelScoped: [] }
-  return { weekly: toStoredWeekly(cache.weekly), modelScoped: toStoredEntries(cache.data) }
+  if (!isFresh(cache)) return { weekly: null, session: null, modelScoped: [] }
+  return {
+    weekly: toStoredBucket(cache.weekly),
+    session: toStoredBucket(cache.session),
+    modelScoped: toStoredEntries(cache.data),
+  }
 }
 
 // キャッシュに保存済みのエントリを読み戻す (API 応答とは形が違うため別に扱う)
@@ -195,6 +206,7 @@ export async function refreshModelUsage(
     cache._cached_at = now
     cache.data = snapshot.modelScoped
     cache.weekly = snapshot.weekly
+    cache.session = snapshot.session
   }
   writeAtomic(path, JSON.stringify(cache))
 }

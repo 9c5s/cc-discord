@@ -206,6 +206,18 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
     ctx.log(`inbound side effects failed: ${e}`)
   }
 
+  // 配送の直前にもう一度確かめる (宛先の作成と activation の解決で時間が過ぎることがある)
+  // ここで落とす場合は この通知のために始めた typing と書いた宛先も戻す
+  const relayFreshness = inboundFreshness(messageId, (ctx.now ?? Date.now)())
+  if (relayFreshness !== 'fresh') {
+    ctx.log(`inbound dropped before relaying: ${relayFreshness} message=${messageId}`)
+    ctx.typing.stop(chatId)
+    for (const entry of listTargets(owner)) {
+      if (entry.target.message_id === messageId) deleteTarget(owner, entry.activationId)
+    }
+    return
+  }
+
   ctx.toClient.write(raw)
 }
 

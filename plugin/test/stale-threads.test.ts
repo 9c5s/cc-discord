@@ -180,3 +180,8 @@ test('archiveStaleThreads は担当名が不正なら何もしない', async () 
   expect(await archiveStaleThreads(a.api, { ...args, owner: '../evil' })).toEqual([])
   expect(a.archived).toEqual([])
 })
+
+test('archiveStaleThreads は archive に失敗したスレッドを結果に含めない', async () => {
+  const a = fakeApi([thread()], { archiveThread: async () => ({ ok: false as const, error: 'http 403' }) })
+  expect(await archiveStaleThreads(a.api, args)).toEqual([])
+})

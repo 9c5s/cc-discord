@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test'
-import { writeRoute, readRoute, routesDir, stateDir } from '../src/routes'
+import { writeRoute, readRoute, deleteRoute, routesDir, stateDir } from '../src/routes'
 import { rmSync, existsSync } from 'fs'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
@@ -55,6 +55,20 @@ test('writeRoute は不正な名前(..)に対して throw する', () => {
 
 test('writeRoute は大文字を含む名前に対して throw する', () => {
   expect(() => writeRoute('UPPER', 'x')).toThrow()
+})
+
+test('deleteRoute は route を削除する', () => {
+  writeRoute('proj', '123')
+  expect(deleteRoute('proj')).toBe(true)
+  expect(readRoute('proj')).toBeNull()
+})
+
+test('deleteRoute は route が無くても成功として扱う', () => {
+  expect(deleteRoute('absent')).toBe(true)
+})
+
+test('deleteRoute は不正な名前では削除しない', () => {
+  expect(deleteRoute('../escape')).toBe(false)
 })
 
 test('stateDir は DISCORD_STATE_DIR 未設定時に homedir/.claude/channels/discord を返す', () => {

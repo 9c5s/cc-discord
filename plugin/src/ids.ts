@@ -19,6 +19,12 @@ export function isHex32(v: unknown): v is string {
   return typeof v === 'string' && /^[0-9a-f]{32}$/.test(v)
 }
 
+// 正規化済みの担当名 (小文字の英数とハイフン)
+// state dir のファイル名に埋める前に必ずこれを通す
+export function isOwnerName(v: unknown): v is string {
+  return typeof v === 'string' && /^[a-z0-9-]+$/.test(v)
+}
+
 // プロセス ID (1 桁から 10 桁の数字列)
 export function isPid(v: unknown): v is string {
   return typeof v === 'string' && /^\d{1,10}$/.test(v)

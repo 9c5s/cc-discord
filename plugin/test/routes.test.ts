@@ -1,6 +1,6 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test'
 import { writeRoute, readRoute, deleteRoute, routesDir, stateDir } from '../src/routes'
-import { rmSync, existsSync } from 'fs'
+import { rmSync, existsSync, readdirSync } from 'fs'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { tmpdir, homedir } from 'os'
@@ -79,4 +79,9 @@ test('stateDir は DISCORD_STATE_DIR 未設定時に homedir/.claude/channels/di
   } finally {
     process.env.DISCORD_STATE_DIR = savedEnv
   }
+})
+
+test('writeRoute は一時ファイルを残さない', () => {
+  writeRoute('proj', '33333333333333333')
+  expect(readdirSync(routesDir())).toEqual(['proj'])
 })

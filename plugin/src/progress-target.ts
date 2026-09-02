@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { isHex32, isSessionId, isSnowflake, resolveInDir } from './ids'
+import { isHex32, isOwnerName, isSessionId, isSnowflake, resolveInDir } from './ids'
 import { stateDir } from './routes'
 
 // 進捗の宛先ファイル ---
@@ -26,18 +26,13 @@ export function progressDir(): string {
   return join(stateDir(), 'progress-thread')
 }
 
-// 正規化済みの担当名だけを受け付ける (routes.ts と同じ契約)
-function isOwner(owner: string): boolean {
-  return /^[a-z0-9-]+$/.test(owner)
-}
-
 function targetPath(owner: string, activationId: string): string | null {
-  if (!isOwner(owner) || !isHex32(activationId)) return null
+  if (!isOwnerName(owner) || !isHex32(activationId)) return null
   return resolveInDir(progressDir(), `${owner}.${activationId}.meta`)
 }
 
 function bodyPath(owner: string): string | null {
-  if (!isOwner(owner)) return null
+  if (!isOwnerName(owner)) return null
   return resolveInDir(progressDir(), owner)
 }
 
@@ -122,7 +117,7 @@ export function isActiveFor(t: ProgressTarget, activationId: string, now: number
 // 同じ担当の宛先を列挙する
 // 担当解決の周期 proxy の終了処理 archive がまとめて操作するために使う
 export function listTargets(owner: string): Array<{ activationId: string; target: ProgressTarget }> {
-  if (!isOwner(owner)) return []
+  if (!isOwnerName(owner)) return []
   let names: string[]
   try {
     names = readdirSync(progressDir())

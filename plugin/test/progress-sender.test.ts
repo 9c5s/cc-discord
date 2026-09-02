@@ -144,6 +144,13 @@ test('createProgressSender は 1900 コードポイントで切り詰める', as
   expect([...(s.posted[0].payload.content as string)]).toHaveLength(1900)
 })
 
+test('createProgressSender の切り詰めはサロゲートペアを分断しない', async () => {
+  setupActive()
+  const s = sender()
+  await s.send('a'.repeat(1899) + '😀😀')
+  expect(s.posted[0].payload.content).toBe('a'.repeat(1899) + '😀')
+})
+
 // --- activation の確認 ---
 
 test('createProgressSender は heartbeat が無ければ終了を返す', async () => {

@@ -491,3 +491,24 @@ test('handleServerMessage は実体の取得を待つ間に鮮度が切れた通
   expect(h.toClient).toEqual([])
   expect(h.typingStarted).toEqual([])
 })
+
+test('handleServerMessage は宛先を作る間に鮮度が切れたら配送も typing も宛先も残さない', async () => {
+  writePointer(pointer())
+  let clock = NOW
+  const h = harness({
+    now: () => clock,
+    api: {
+      startThread: async () => {
+        // スレッドの作成に長く待たされた状況を作る
+        clock = NOW + 2 * 60 * 60 * 1000
+        return { ok: true as const, value: { id: THREAD } }
+      },
+    },
+  })
+  const msg = notification()
+  await handleServerMessage(msg, raw(msg), h.ctx)
+
+  expect(h.toClient).toEqual([])
+  expect(h.typingStopped).toEqual([CH])
+  expect(listTargets(OWNER)).toEqual([])
+})

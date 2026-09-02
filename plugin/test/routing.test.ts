@@ -7,6 +7,7 @@ import {
   ownerContext,
   resolveOwnerChannel,
   type GuildChannels,
+  type OwnerContext,
 } from '../src/routing'
 
 // GuildText の候補を組み立てる補助
@@ -281,7 +282,7 @@ test('decideDelivery は取得した実体の id が要求と一致しなけれ�
 
 const OUT_OWNED = '22222222222222222'
 const OUT_OTHER = '44444444444444444'
-const outNamed = { kind: 'outNamed' as const, owner: 'proj', dir: '/w/proj' }
+const outNamed: OwnerContext = { kind: 'named', owner: 'proj', dir: '/w/proj' }
 
 test('decideOutbound は担当チャンネルへの送信を許す', () => {
   const entity = { id: OUT_OWNED, type: 0 }
@@ -318,7 +319,7 @@ test('decideOutbound は実体を取得できなければ拒む', () => {
 
 test('decideOutbound は DM を cc-discord 担当のセッションにだけ許す', () => {
   const entity = { id: '66666666666666666', type: 1 }
-  const dmOwner = { kind: 'outNamed' as const, owner: 'cc-discord', dir: '/w/cc-discord' }
+  const dmOwner: OwnerContext = { kind: 'named', owner: 'cc-discord', dir: '/w/cc-discord' }
   expect(decideOutbound(dmOwner, { ownerChannelId: null, chatId: '66666666666666666', entity })).toEqual({ ok: true })
   expect(decideOutbound(outNamed, { ownerChannelId: OUT_OWNED, chatId: '66666666666666666', entity })).toEqual({
     ok: false,

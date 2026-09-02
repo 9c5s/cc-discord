@@ -93,8 +93,12 @@ export function createOwnerResolver(deps: {
 
   // 取得に失敗した周期の後始末
   // 猶予の内は前回の担当を据え置き 超えたら手放す
+  // 担当を持たない周期でも 前回のファイル反映が済んでいなければ試し直す
   const giveUpIfStale = (): void => {
-    if (channelId === null) return
+    if (channelId === null) {
+      if (unapplied) setOwned(null, null)
+      return
+    }
     if (lastSuccessAt !== null && now() - lastSuccessAt <= RESOLVE_GRACE_MS) return
     log('[resolver] dropping the owner channel: the resolution keeps failing')
     setOwned(null, null)

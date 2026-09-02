@@ -150,6 +150,17 @@ export function writeProgressBody(owner: string, id: string): boolean {
   return writeAtomic(path, id)
 }
 
+export function deleteProgressBody(owner: string): boolean {
+  const path = bodyPath(owner)
+  if (!path) return false
+  try {
+    rmSync(path, { force: true })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function readProgressBody(owner: string): string | null {
   const path = bodyPath(owner)
   if (!path) return null

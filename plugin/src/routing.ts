@@ -1,5 +1,5 @@
 import { normalizeName, ownerFromDir } from './normalize'
-import { isSnowflake } from './ids'
+import { isSnowflake, snowflakeTime } from './ids'
 
 // 担当名の解決 ---
 // 担当ディレクトリは CC_DISCORD_PROJECT_DIR (検証用の上書き) を CLAUDE_PROJECT_DIR より優先する
@@ -83,6 +83,12 @@ export function isThread(entity: ChannelEntity): boolean {
   return THREAD_TYPES.has(entity.type as number)
 }
 
+// 受理する inbound の古さの上限
+// inbound のロックは 12 時間残るため それより十分に短くして
+// 回収された後のロックを取り直して同じ通知を二重に処理する余地を無くす
+// 処理が詰まって時間が空いた場合や プロセスが長く止まって再開した場合にも 古い通知は配送しない
+export const INBOUND_MAX_AGE_MS = 60 * 60 * 1000
+
 export type InboundMeta = { chat_id?: unknown; message_id?: unknown }
 
 export type InboundClass =
@@ -91,10 +97,13 @@ export type InboundClass =
   | { action: 'inspect'; owner: string; chatId: string; messageId: string }
 
 // 担当名と通知 meta から 実体取得の要否を決める
-export function classifyInbound(ctx: OwnerContext, meta: InboundMeta): InboundClass {
+// message_id の生成時刻で鮮度も見る (未来側は時計のずれとして許す)
+export function classifyInbound(ctx: OwnerContext, meta: InboundMeta, now: number = Date.now()): InboundClass {
   if (ctx.kind === 'none') return { action: 'passthrough' }
   if (ctx.kind === 'broken') return { action: 'drop', reason: 'ROUTING_BROKEN' }
   if (!isSnowflake(meta.chat_id) || !isSnowflake(meta.message_id)) return { action: 'drop', reason: 'INVALID_ID' }
+  const sentAt = snowflakeTime(meta.message_id)
+  if (sentAt === null || now - sentAt > INBOUND_MAX_AGE_MS) return { action: 'drop', reason: 'TOO_OLD' }
   return { action: 'inspect', owner: ctx.owner, chatId: meta.chat_id, messageId: meta.message_id }
 }
 

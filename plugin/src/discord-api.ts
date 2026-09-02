@@ -65,15 +65,18 @@ export function createDiscordClient(opts: ClientOptions = {}): DiscordClient {
   // 公式が指定した待ち時間はそのまま返す (短く丸めた再送は仕様違反である)
   // 読めない値と負の値だけ 1 秒に倒す
   const retryWaitMs = async (res: Response): Promise<number> => {
-    let sec = 1
+    let sec: number | null = null
     try {
       const body = (await res.clone().json()) as Record<string, unknown>
       if (typeof body.retry_after === 'number') sec = body.retry_after
     } catch {
-      const header = parseFloat(res.headers.get('Retry-After') ?? '1')
+      // 本文が読めない場合はヘッダで決める
+    }
+    if (sec === null) {
+      const header = parseFloat(res.headers.get('Retry-After') ?? '')
       if (!Number.isNaN(header)) sec = header
     }
-    if (!Number.isFinite(sec) || sec < 0) sec = 1
+    if (sec === null || !Number.isFinite(sec) || sec < 0) sec = 1
     return sec * 1000
   }
 

@@ -211,15 +211,6 @@ export async function refreshModelUsage(
   writeAtomic(path, JSON.stringify(cache))
 }
 
-// rate_limits.seven_day を与えられた週次値へ差し替える
-// 括弧内のモデル別枠と同じ取得時点の値を並べるためである
-// 週次の値が無ければ元の data をそのまま返す
-export function withCachedWeekly(data: J, weekly: WeeklyBucket | null): J {
-  const rl = obj(data.rate_limits)
-  if (weekly === null || rl === null) return data
-  return { ...data, rate_limits: { ...rl, seven_day: weekly } }
-}
-
 // 更新用の子プロセスをデタッチして起動する
 function spawnRefresh(): void {
   try {

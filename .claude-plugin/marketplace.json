@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "cc-discord",
+  "description": "公式 discord channel plugin を拡張する透過プロキシ型プラグイン",
+  "owner": {
+    "name": "9c5s",
+    "url": "https://github.com/9c5s"
+  },
+  "plugins": [
+    {
+      "name": "cc-discord",
+      "author": { "name": "9c5s" },
+      "source": "./plugin",
+      "description": "公式 discord channel plugin を拡張する透過プロキシ型プラグイン"
+    }
+  ]
+}

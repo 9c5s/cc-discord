@@ -24,7 +24,7 @@ export function debugLog(msg: string): void {
 
 // ボットトークンは環境変数を優先し なければ .env ファイルから読む
 // readFileSync は TOCTOU で throw しうるため try/catch で包み null フォールバックにする
-function token(): string | null {
+export function botToken(): string | null {
   if (process.env.DISCORD_BOT_TOKEN) return process.env.DISCORD_BOT_TOKEN
   const envf = join(stateDir(), '.env')
   if (!existsSync(envf)) return null
@@ -79,7 +79,7 @@ let lastSkipReason = ''
 // HTTP エラー検知と 429 再送を実装する
 // 無音 return の理由を debugLog に出す
 async function postMessage(text: string): Promise<void> {
-  const t = token()
+  const t = botToken()
   const cid = progressChannelId()
 
   // スキップ理由の可視化 ---

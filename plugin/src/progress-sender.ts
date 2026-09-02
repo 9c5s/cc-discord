@@ -15,6 +15,9 @@ import { isThread, resolveOwnerChannel, type ChannelEntity } from './routing'
 const SUPPRESS_NOTIFICATIONS = 1 << 12
 // Discord の上限に対する最終安全弁 (コードポイント単位で数える)
 const MAX_CONTENT_POINTS = 1900
+// 429 の待ちに付き合う上限
+// これを超える待ちは諦める (途中経過は遅れて届いても価値が薄く 待つ間に activation も変わりやすい)
+const MAX_RETRY_WAIT_MS = 10_000
 
 export type SendOutcome = 'sent' | 'dropped' | 'terminated'
 
@@ -120,6 +123,10 @@ export function createProgressSender(deps: SenderDeps): { send(text: string): Pr
       if (res.ok) return 'sent'
       if (res.retryAfterMs === undefined) {
         log(`progress send failed: ${res.error}`)
+        return 'dropped'
+      }
+      if (res.retryAfterMs > MAX_RETRY_WAIT_MS) {
+        log(`progress skip: rate limited for ${res.retryAfterMs}ms`)
         return 'dropped'
       }
       await sleep(res.retryAfterMs)

@@ -13,6 +13,7 @@ import {
   sweepInboundLocks,
   type TypingController,
 } from './inbound'
+import { isSnowflake } from './ids'
 import { botToken, ownerName } from './notify'
 import { inspectOfficial, officialPluginDir } from './official'
 import { createOwnerResolver } from './owner-resolver'
@@ -20,7 +21,7 @@ import { deleteTarget, listTargets, writeProgressBody, writeTarget } from './pro
 import { createWriter, readJsonLines, type Json, type Writer } from './relay'
 import { handleEditMessage, handleReply } from './reply'
 import { stateDir } from './routes'
-import { classifyInbound, decideDelivery, ownerContext, type OwnerContext } from './routing'
+import { classifyInbound, decideDelivery, decideOutbound, ownerContext, type OwnerContext } from './routing'
 import { archiveStaleThreads } from './stale-threads'
 import { ensureFresh } from './usage'
 
@@ -197,7 +198,30 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
 // client -> server ---
 // take over 対象は子へ送らず proxy が処理する
 // 応答は元の id を型ごと保ち 1 回だけ返す
-export function handleClientMessage(msg: Json, raw: string, ctx: ProxyContext): void | Promise<void> {
+// take over しない送信系ツールも 宛先が担当のものかを確かめてから子へ渡す
+// 公式の allowlist は bot に登録された全チャンネルを許すため それだけでは担当の分離が破れる
+
+// 宛先を引数に持つ公式ツールと その引数名
+const TARGET_ARG: Record<string, string> = {
+  react: 'chat_id',
+  download_attachment: 'chat_id',
+  fetch_messages: 'channel',
+}
+
+// 宛先が担当のものかを確かめる (担当外なら理由を返す)
+async function unownedReason(ctx: ProxyContext, chatId: unknown): Promise<string | null> {
+  if (ctx.ownerCtx.kind === 'none') return null
+  if (!isSnowflake(chatId)) return `invalid channel: ${String(chatId)}`
+  const channel = await ctx.api.getChannel(chatId)
+  const decision = decideOutbound(ctx.ownerCtx, {
+    ownerChannelId: ctx.ownerChannelId(),
+    chatId,
+    entity: channel.ok ? channel.value : null,
+  })
+  return decision.ok ? null : `channel ${chatId} is not owned by this session: ${decision.reason}`
+}
+
+export async function handleClientMessage(msg: Json, raw: string, ctx: ProxyContext): Promise<void> {
   if (msg.method === 'initialize') {
     ctx.rewriter.noteRequest(msg)
     ctx.toChild.write(raw)
@@ -210,27 +234,48 @@ export function handleClientMessage(msg: Json, raw: string, ctx: ProxyContext): 
 
   const params = (msg.params ?? {}) as Json
   const name = params.name
-  if (name !== 'reply' && name !== 'edit_message') {
-    ctx.toChild.write(raw)
-    return
-  }
-  // 応答先の無い要求 (通知) には応答できないため そのまま捨てる
-  if (msg.id === undefined) {
-    ctx.log(`take over skipped: ${String(name)} has no id`)
+  const args = (params.arguments ?? {}) as Record<string, unknown>
+
+  if (name === 'reply' || name === 'edit_message') {
+    // 応答先の無い要求 (通知) には応答できないため そのまま捨てる
+    if (msg.id === undefined) {
+      ctx.log(`take over skipped: ${name} has no id`)
+      return
+    }
+    const deps = {
+      api: ctx.api,
+      access: ctx.access,
+      footer: ctx.footer,
+      stopTyping: (chatId: string) => ctx.typing.stop(chatId),
+      ownerCtx: ctx.ownerCtx,
+      ownerChannelId: ctx.ownerChannelId,
+    }
+    const result = name === 'reply' ? await handleReply(args, deps) : await handleEditMessage(args, deps)
+    ctx.toClient.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }))
     return
   }
 
-  const args = (params.arguments ?? {}) as Record<string, unknown>
-  const deps = {
-    api: ctx.api,
-    access: ctx.access,
-    footer: ctx.footer,
-    stopTyping: (chatId: string) => ctx.typing.stop(chatId),
+  const targetArg = typeof name === 'string' ? TARGET_ARG[name] : undefined
+  if (targetArg === undefined) {
+    ctx.toChild.write(raw)
+    return
   }
-  const run = name === 'reply' ? handleReply(args, deps) : handleEditMessage(args, deps)
-  return run.then((result) => {
-    ctx.toClient.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }))
-  })
+
+  const reason = await unownedReason(ctx, args[targetArg])
+  if (reason === null) {
+    ctx.toChild.write(raw)
+    return
+  }
+  ctx.log(`tools/call blocked: ${name} ${reason}`)
+  // 応答できない要求は捨てるだけにする (担当外の宛先を子へ渡さない)
+  if (msg.id === undefined) return
+  ctx.toClient.write(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: msg.id,
+      result: { content: [{ type: 'text', text: `${name} failed: ${reason}` }], isError: true },
+    }),
+  )
 }
 
 // 終了時の後片付け ---

@@ -137,3 +137,24 @@ export function decideDelivery(input: {
   if (parentId !== ownerChannelId) return { action: 'drop', reason: 'NOT_OWNED' }
   return { action: 'handle', kind: 'guild', parentId }
 }
+
+// 送信先の担当判定 (outbound gate) ---
+// 送信系ツールの宛先を inbound と同じ決定関数で絞り 担当外のチャンネルに触れさせない
+// 担当ディレクトリが未設定のセッションでは判定を行わない (単独運用の後方互換)
+
+export type OutboundDecision = { ok: true } | { ok: false; reason: string }
+
+export function decideOutbound(
+  ctx: OwnerContext,
+  input: { ownerChannelId: string | null; chatId: string; entity: ChannelEntity | null },
+): OutboundDecision {
+  if (ctx.kind === 'none') return { ok: true }
+  if (ctx.kind === 'broken') return { ok: false, reason: 'ROUTING_BROKEN' }
+  const decision = decideDelivery({
+    owner: ctx.owner,
+    ownerChannelId: input.ownerChannelId,
+    chatId: input.chatId,
+    entity: input.entity,
+  })
+  return decision.action === 'handle' ? { ok: true } : { ok: false, reason: decision.reason }
+}

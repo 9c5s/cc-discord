@@ -4,6 +4,7 @@ import { isAllowedTarget, type Access } from './access'
 import type { DiscordClient, OutFile } from './discord-api'
 import { isSnowflake } from './ids'
 import { stateDir } from './routes'
+import { decideOutbound, type OwnerContext } from './routing'
 
 // reply / edit_message の take over ---
 // 公式 0.0.4 の意味論 (引数 chunk outbound gate assertSendable) を移植する
@@ -83,6 +84,8 @@ export type ReplyDeps = {
   access: () => Access
   footer: () => string
   stopTyping: (chatId: string) => void
+  ownerCtx: OwnerContext
+  ownerChannelId: () => string | null
 }
 
 const ok = (text: string): ToolResult => ({ content: [{ type: 'text', text }] })
@@ -106,13 +109,21 @@ function loadFiles(paths: string[]): OutFile[] {
   return out
 }
 
-// 宛先が allowlist の内側かを実体で確かめる (公式 fetchAllowedChannel と同じ判定)
+// 宛先が allowlist の内側かを実体で確かめ (公式 fetchAllowedChannel と同じ判定)
+// さらに inbound と同じ決定関数で担当セッションの持ち物かを確かめる
+// allowlist だけでは同じ bot に登録された全チャンネルへ送れてしまい 担当の分離が破れる
 async function assertAllowed(deps: ReplyDeps, chatId: string): Promise<void> {
   const res = await deps.api.getChannel(chatId)
   if (!res.ok) throw new Error(`channel ${chatId} lookup failed: ${res.error}`)
   if (!isAllowedTarget(deps.access(), chatId, res.value)) {
     throw new Error(`channel ${chatId} is not allowlisted — add via /cc-discord:access`)
   }
+  const owned = decideOutbound(deps.ownerCtx, {
+    ownerChannelId: deps.ownerChannelId(),
+    chatId,
+    entity: res.value,
+  })
+  if (!owned.ok) throw new Error(`channel ${chatId} is not owned by this session: ${owned.reason}`)
 }
 
 // reply の take over
@@ -125,15 +136,17 @@ export async function handleReply(args: Record<string, unknown>, deps: ReplyDeps
 
   try {
     if (!isSnowflake(chatId)) throw new Error(`invalid chat_id: ${String(chatId)}`)
+
+    // typing は宛先が分かった時点で無条件に停止する
+    // interrupt で reply されないターンの取りこぼしを避けるための明示的な挙動であり
+    // 引数の不備や担当外の宛先で入力中の表示を残さないため 他の検証より先に行う
+    deps.stopTyping(chatId)
+
     if (typeof text !== 'string') throw new Error('text must be a string')
     if (replyTo !== undefined && !isSnowflake(replyTo)) throw new Error(`invalid reply_to: ${String(replyTo)}`)
     if (files !== undefined && (!Array.isArray(files) || files.some((f) => typeof f !== 'string'))) {
       throw new Error('files must be an array of paths')
     }
-
-    // typing は tools/call を受けた時点で無条件に停止する
-    // interrupt で reply されないターンの取りこぼしを避けるための明示的な挙動である
-    deps.stopTyping(chatId)
 
     await assertAllowed(deps, chatId)
     const attachments = files ? loadFiles(files as string[]) : []

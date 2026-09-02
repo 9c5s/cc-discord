@@ -39,6 +39,7 @@ const CH = '33333333333333333'
 const THREAD = '44444444444444444'
 const ANCHOR = '88888888888888888'
 const DM_CH = '77777777777777777'
+const FOREIGN = '55555555555555555'
 const MSG = '99999999999999999'
 const USER = '258152380355444736'
 const NOW = 1_800_000_000_000
@@ -139,6 +140,7 @@ function harness(over: Record<string, unknown> = {}): Harness {
     [CH]: { id: CH, type: 0 },
     [THREAD]: { id: THREAD, type: 11, parent_id: CH },
     [DM_CH]: { id: DM_CH, type: 1, recipients: [{ id: USER }] },
+    [FOREIGN]: { id: FOREIGN, type: 0 },
   }
   const api = {
     getChannel: async (id: string): Promise<ApiResult<Record<string, unknown>>> =>
@@ -285,10 +287,10 @@ test('handleServerMessage は通知以外のメッセージを素通しする', 
 
 // --- client -> server ---
 
-test('handleClientMessage は take over 以外を子へ転送する', () => {
+test('handleClientMessage は take over も担当判定も要さない要求を子へ転送する', async () => {
   const h = harness()
-  const msg: Json = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'react', arguments: {} } }
-  handleClientMessage(msg, raw(msg), h.ctx)
+  const msg: Json = { jsonrpc: '2.0', id: 1, method: 'tools/list' }
+  await handleClientMessage(msg, raw(msg), h.ctx)
   expect(h.toChild).toEqual([raw(msg)])
 })
 
@@ -401,4 +403,71 @@ test('cleanupRun は run_id を持たない起動では何もしない', () => {
   cleanupRun({ claudePid: PID, runId: null, owner: OWNER })
   expect(readPointer(PID)).not.toBe(null)
   expect(readTarget(OWNER, ACT)).not.toBe(null)
+})
+
+// --- 担当外の tools/call の遮断 ---
+
+const call = (name: string, args: Record<string, unknown>, id: unknown = 7): Json => ({
+  jsonrpc: '2.0',
+  id,
+  method: 'tools/call',
+  params: { name, arguments: args },
+})
+
+test('handleClientMessage は担当外のチャンネルへの react を子へ転送しない', async () => {
+  const h = harness()
+  const msg = call('react', { chat_id: FOREIGN, message_id: MSG, emoji: '👍' })
+  await handleClientMessage(msg, raw(msg), h.ctx)
+  expect(h.toChild).toEqual([])
+  const res = JSON.parse(h.toClient[0]) as Json
+  expect((res.result as Json).isError).toBe(true)
+  expect(res.id).toBe(7)
+})
+
+test('handleClientMessage は担当チャンネルへの react を子へ転送する', async () => {
+  const h = harness()
+  const msg = call('react', { chat_id: CH, message_id: MSG, emoji: '👍' })
+  await handleClientMessage(msg, raw(msg), h.ctx)
+  expect(h.toChild).toEqual([raw(msg)])
+  expect(h.toClient).toEqual([])
+})
+
+test('handleClientMessage は fetch_messages を channel 引数で判定する', async () => {
+  const h = harness()
+  const denied = call('fetch_messages', { channel: FOREIGN })
+  await handleClientMessage(denied, raw(denied), h.ctx)
+  expect(h.toChild).toEqual([])
+  const allowed = call('fetch_messages', { channel: THREAD })
+  await handleClientMessage(allowed, raw(allowed), h.ctx)
+  expect(h.toChild).toEqual([raw(allowed)])
+})
+
+test('handleClientMessage は担当外の download_attachment を遮断する', async () => {
+  const h = harness()
+  const msg = call('download_attachment', { chat_id: FOREIGN, message_id: MSG })
+  await handleClientMessage(msg, raw(msg), h.ctx)
+  expect(h.toChild).toEqual([])
+})
+
+test('handleClientMessage は担当なしのセッションでは遮断しない', async () => {
+  const h = harness({ ownerCtx: { kind: 'none' }, ownerChannelId: null })
+  const msg = call('react', { chat_id: FOREIGN, message_id: MSG, emoji: '👍' })
+  await handleClientMessage(msg, raw(msg), h.ctx)
+  expect(h.toChild).toEqual([raw(msg)])
+})
+
+test('handleClientMessage は実体を取得できないチャンネルへの react を遮断する', async () => {
+  const h = harness()
+  const msg = call('react', { chat_id: '11111111111111111', message_id: MSG, emoji: '👍' })
+  await handleClientMessage(msg, raw(msg), h.ctx)
+  expect(h.toChild).toEqual([])
+})
+
+test('handleClientMessage は id を持たない担当外の tools/call を捨てて応答しない', async () => {
+  const h = harness()
+  const msg = call('react', { chat_id: FOREIGN, message_id: MSG, emoji: '👍' }, undefined)
+  delete msg.id
+  await handleClientMessage(msg, raw(msg), h.ctx)
+  expect(h.toChild).toEqual([])
+  expect(h.toClient).toEqual([])
 })

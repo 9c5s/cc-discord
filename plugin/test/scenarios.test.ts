@@ -7,6 +7,7 @@ import { readPointer, writeHeartbeat, writePointer, type Pointer } from '../src/
 import { readTarget, writeTarget, type ProgressTarget } from '../src/progress-target'
 import { runSessionStart } from '../src/session-start'
 import { cleanupRun } from '../src/proxy'
+import { handleReply } from '../src/reply'
 import type { ApiResult, DiscordClient } from '../src/discord-api'
 import type { Access } from '../src/access'
 
@@ -92,10 +93,16 @@ function fakeApi() {
   return { api, posted }
 }
 
-function sender(api: DiscordClient, claudePid: number, runId: string, activationId: string) {
+function sender(
+  api: DiscordClient,
+  claudePid: number,
+  runId: string,
+  activationId: string,
+  access: Access = ACCESS,
+) {
   return createProgressSender({
     api,
-    access: () => ACCESS,
+    access: () => access,
     owner: OWNER,
     claudePid,
     runId,
@@ -210,4 +217,78 @@ test('ポインタの置き換えに失敗した状態では旧 activation が�
   // hook が動かなければポインタは変わらず 旧 activation の送信は続く
   expect(await sender(f.api, PID_A, RUN_A, ACT_1).send('進捗')).toBe('sent')
   expect(f.posted).toHaveLength(1)
+})
+
+// --- 担当の分離 ---
+
+const OWNER_B = 'other'
+const CH_B = '66666666666666666'
+const ACCESS_BOTH: Access = { allowFrom: [USER], groups: { [CH]: {}, [CH_B]: {} } }
+
+// 2 つの担当チャンネルが登録済みの guild
+function twoOwnerApi() {
+  const posted: Array<{ channelId: string }> = []
+  const api = {
+    getChannel: async (id: string): Promise<ApiResult<Record<string, unknown>>> =>
+      id === CH || id === CH_B
+        ? { ok: true, value: { id, type: 0 } }
+        : { ok: true, value: { id, type: 11, parent_id: CH } },
+    getGuilds: async () => ({ ok: true as const, value: [{ id: GUILD }] }),
+    getGuildChannels: async () => ({
+      ok: true as const,
+      value: [
+        { id: CH, name: OWNER, type: 0 },
+        { id: CH_B, name: OWNER_B, type: 0 },
+      ],
+    }),
+    createMessage: async (channelId: string) => {
+      posted.push({ channelId })
+      return { ok: true as const, value: { id: '10000000000000001' } }
+    },
+  } as unknown as DiscordClient
+  return { api, posted }
+}
+
+test('担当 A のセッションは登録済みでも担当 B のチャンネルへ返信しない', async () => {
+  const f = twoOwnerApi()
+  const res = await handleReply(
+    { chat_id: CH_B, text: 'B のチャンネルへ' },
+    {
+      api: f.api,
+      access: () => ACCESS_BOTH,
+      footer: () => '',
+      stopTyping: () => {},
+      ownerCtx: { kind: 'named', owner: OWNER, dir: 'C:\example\proj' },
+      ownerChannelId: () => CH,
+    },
+  )
+  expect(res.isError).toBe(true)
+  expect(f.posted).toEqual([])
+})
+
+test('担当 A のセッションは自分の担当チャンネルへは返信する', async () => {
+  const f = twoOwnerApi()
+  const res = await handleReply(
+    { chat_id: CH, text: 'A のチャンネルへ' },
+    {
+      api: f.api,
+      access: () => ACCESS_BOTH,
+      footer: () => '',
+      stopTyping: () => {},
+      ownerCtx: { kind: 'named', owner: OWNER, dir: 'C:\example\proj' },
+      ownerChannelId: () => CH,
+    },
+  )
+  expect(res.isError).toBeUndefined()
+  expect(f.posted.map((x) => x.channelId)).toEqual([CH])
+})
+
+test('宛先が担当 B のチャンネルを指していても進捗は送らない', async () => {
+  writePointer(pointer())
+  writeHeartbeat(PID_A, RUN_A, NOW)
+  writeTarget(OWNER, target({ id: CH_B, parent: CH_B }))
+
+  const f = twoOwnerApi()
+  expect(await sender(f.api, PID_A, RUN_A, ACT_1, ACCESS_BOTH).send('B へ漏らさない')).toBe('dropped')
+  expect(f.posted).toEqual([])
 })

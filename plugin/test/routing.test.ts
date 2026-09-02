@@ -1,5 +1,12 @@
 import { test, expect } from 'bun:test'
-import { classifyInbound, decideDelivery, ownerContext, resolveOwnerChannel, type GuildChannels } from '../src/routing'
+import {
+  classifyInbound,
+  decideDelivery,
+  decideOutbound,
+  ownerContext,
+  resolveOwnerChannel,
+  type GuildChannels,
+} from '../src/routing'
 
 // GuildText の候補を組み立てる補助
 function guild(guildId: string, channels: Array<{ id: string; name: string; type?: number }>): GuildChannels {
@@ -244,4 +251,66 @@ test('decideDelivery は取得した実体の id が要求と一致しなけれ�
     entity: { id: '55555555555555555', type: 0 },
   })
   expect(decision).toEqual({ action: 'drop', reason: 'CHANNEL_ID_MISMATCH' })
+})
+
+// --- decideOutbound ---
+
+const OUT_OWNED = '22222222222222222'
+const OUT_OTHER = '44444444444444444'
+const outNamed = { kind: 'outNamed' as const, owner: 'proj', dir: '/w/proj' }
+
+test('decideOutbound は担当チャンネルへの送信を許す', () => {
+  const entity = { id: OUT_OWNED, type: 0 }
+  expect(decideOutbound(outNamed, { ownerChannelId: OUT_OWNED, chatId: OUT_OWNED, entity })).toEqual({ ok: true })
+})
+
+test('decideOutbound は担当チャンネル配下のスレッドへの送信を許す', () => {
+  const entity = { id: '55555555555555555', type: 11, parent_id: OUT_OWNED }
+  expect(decideOutbound(outNamed, { ownerChannelId: OUT_OWNED, chatId: '55555555555555555', entity })).toEqual({ ok: true })
+})
+
+test('decideOutbound は担当外のチャンネルへの送信を拒む', () => {
+  const entity = { id: OUT_OTHER, type: 0 }
+  expect(decideOutbound(outNamed, { ownerChannelId: OUT_OWNED, chatId: OUT_OTHER, entity })).toEqual({
+    ok: false,
+    reason: 'NOT_OWNED',
+  })
+})
+
+test('decideOutbound は担当が未解決なら guild への送信を拒む', () => {
+  const entity = { id: OUT_OWNED, type: 0 }
+  expect(decideOutbound(outNamed, { ownerChannelId: null, chatId: OUT_OWNED, entity })).toEqual({
+    ok: false,
+    reason: 'NO_OWNER_CHANNEL',
+  })
+})
+
+test('decideOutbound は実体を取得できなければ拒む', () => {
+  expect(decideOutbound(outNamed, { ownerChannelId: OUT_OWNED, chatId: OUT_OWNED, entity: null })).toEqual({
+    ok: false,
+    reason: 'CHANNEL_FETCH_FAILED',
+  })
+})
+
+test('decideOutbound は DM を cc-discord 担当のセッションにだけ許す', () => {
+  const entity = { id: '66666666666666666', type: 1 }
+  const dmOwner = { kind: 'outNamed' as const, owner: 'cc-discord', dir: '/w/cc-discord' }
+  expect(decideOutbound(dmOwner, { ownerChannelId: null, chatId: '66666666666666666', entity })).toEqual({ ok: true })
+  expect(decideOutbound(outNamed, { ownerChannelId: OUT_OWNED, chatId: '66666666666666666', entity })).toEqual({
+    ok: false,
+    reason: 'NOT_DM_OWNER',
+  })
+})
+
+test('decideOutbound は担当なしのセッションでは判定しない', () => {
+  const entity = { id: OUT_OTHER, type: 0 }
+  expect(decideOutbound({ kind: 'none' }, { ownerChannelId: null, chatId: OUT_OTHER, entity })).toEqual({ ok: true })
+})
+
+test('decideOutbound は担当名が壊れているセッションの送信を拒む', () => {
+  const entity = { id: OUT_OTHER, type: 0 }
+  expect(decideOutbound({ kind: 'broken', dir: '/w/---' }, { ownerChannelId: null, chatId: OUT_OTHER, entity })).toEqual({
+    ok: false,
+    reason: 'ROUTING_BROKEN',
+  })
 })

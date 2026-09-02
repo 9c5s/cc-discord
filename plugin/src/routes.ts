@@ -1,6 +1,6 @@
 import { homedir } from 'os'
 import { join } from 'path'
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs'
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs'
 
 // server.ts と同じ STATE_DIR 規約
 // DISCORD_STATE_DIR があればそれを優先
@@ -21,6 +21,18 @@ export function writeRoute(normName: string, channelId: string): void {
   const dir = routesDir()
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   writeFileSync(join(dir, normName), channelId, { encoding: 'utf8', mode: 0o600 })
+}
+
+// 担当チャンネルの route を削除する
+// 正規化済みの名前のみ受け付け 不在は削除済みとみなす
+export function deleteRoute(normName: string): boolean {
+  if (!/^[a-z0-9-]+$/.test(normName)) return false
+  try {
+    rmSync(join(routesDir(), normName), { force: true })
+    return true
+  } catch {
+    return false
+  }
 }
 
 export function readRoute(normName: string): string | null {

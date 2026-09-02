@@ -9,7 +9,10 @@ import { threadName } from './summarize'
 // typing はロックを取ったプロセスだけが継続し reply で無条件に停止する
 
 // 残置ロックの回収までの時間
-const LOCK_MAX_AGE_MS = 60_000
+// 通知は前の処理が終わるまで直列のキューで待つため 処理の開始が数十秒遅れることがある
+// 処理中のロックを回収すると同じ inbound を二重に処理できてしまうので
+// 回収は異常終了で残ったロックの掃除だけを狙い 宛先の有効期間と同じ長さにする
+const LOCK_MAX_AGE_MS = 12 * 60 * 60 * 1000
 // Discord の typing 表示は約 10 秒で消えるため 8 秒ごとに送り直す
 const TYPING_RESEND_MS = 8_000
 // 応答が返らないまま typing が残り続けないための安全弁

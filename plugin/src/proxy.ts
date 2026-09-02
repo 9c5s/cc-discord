@@ -169,14 +169,6 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
     return
   }
 
-  // 実体の取得を待つ間に鮮度が切れていないか確かめ直す
-  // 待ちが長引くと 回収済みのロックを取り直して古い通知を二重に配送しうる
-  const freshness = inboundFreshness(messageId, (ctx.now ?? Date.now)())
-  if (freshness !== 'fresh') {
-    ctx.log(`inbound dropped after locking: ${freshness} message=${messageId}`)
-    return
-  }
-
   // ここから先は best effort である (失敗しても通知は転送する)
   // 待ちを伴う準備 (スレッドの作成と activation の解決) だけを先に済ませ ファイルにはまだ書かない
   let location: TargetLocation | null = null
@@ -196,7 +188,9 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
     ctx.log(`inbound side effects failed: ${e}`)
   }
 
-  // 配送の直前にもう一度確かめる (宛先の作成と activation の解決で時間が過ぎることがある)
+  // 配送の直前にもう一度確かめる
+  // 実体の取得から宛先の作成までは待ちの連続で その間にプロセスが長く止まることがある
+  // ロックが回収された後に古い通知を配送しないための最後の関門である
   // ここで落とす場合は この通知のために始めた typing も止める
   const relayFreshness = inboundFreshness(messageId, (ctx.now ?? Date.now)())
   if (relayFreshness !== 'fresh') {

@@ -125,20 +125,16 @@ test('readLastAssistantEntry は effort が無いエントリで effort を null
 // --- modelDisplayName ---
 
 test('modelDisplayName は family と major.minor を表示名にする', () => {
-  expect(modelDisplayName('claude-fable-5-1', false)).toBe('Fable 5.1')
-  expect(modelDisplayName('claude-haiku-4-5-20251001', false)).toBe('Haiku 4.5')
+  expect(modelDisplayName('claude-fable-5-1')).toBe('Fable 5.1')
+  expect(modelDisplayName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
 })
 
 test('modelDisplayName は minor が無ければ major だけにする', () => {
-  expect(modelDisplayName('claude-opus-5', false)).toBe('Opus 5')
-})
-
-test('modelDisplayName は 1M のとき括弧書きを付ける', () => {
-  expect(modelDisplayName('claude-opus-5', true)).toBe('Opus 5 (1M)')
+  expect(modelDisplayName('claude-opus-5')).toBe('Opus 5')
 })
 
 test('modelDisplayName は規約外の id をそのまま使う', () => {
-  expect(modelDisplayName('gpt-9', false)).toBe('gpt-9')
+  expect(modelDisplayName('gpt-9')).toBe('gpt-9')
 })
 
 // --- contextWindow ---
@@ -198,7 +194,8 @@ test('buildFooter はモデルと ctx と 5h と 7d を含むブロックを作�
   writeSettings(join(ownerDir, '.claude'), 'settings.json', 'opus[1m]')
   const p = tmpFile('t.jsonl', `${assistantLine()}\n`)
   const footer = buildFooter({ transcriptPath: p, ownerDir, usage: USAGE })
-  expect(footer).toContain('👾 Opus 5 (1M) | 🧠 high')
+  // 1M かどうかは ctx% の分母にだけ効かせ 表示名には出さない
+  expect(footer).toContain('👾 Opus 5 | 🧠 high')
   // 1000 / 1_000_000 = 0.1% -> 切り捨てて 0%
   expect(footer).toContain('📊 0%')
   expect(footer).toContain('⏰ 63%')

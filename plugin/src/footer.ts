@@ -80,13 +80,12 @@ export function readLastAssistantEntry(path: string): AssistantEntry | null {
 // モデル id を表示名にする
 // claude-<family>-<major>[-<minor>] の形なら family を先頭大文字にして major.minor を付ける
 // 規約から外れた id はそのまま使う
-export function modelDisplayName(modelId: string, oneMillion: boolean): string {
+// context window の広さは表示名に出さない (ctx% の分母にだけ効かせる)
+export function modelDisplayName(modelId: string): string {
   const m = /^claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(modelId)
-  const suffix = oneMillion ? ' (1M)' : ''
-  if (!m) return `${modelId}${suffix}`
+  if (!m) return modelId
   const family = m[1].charAt(0).toUpperCase() + m[1].slice(1)
-  const version = m[3] ? `${m[2]}.${m[3]}` : m[2]
-  return `${family} ${version}${suffix}`
+  return `${family} ${m[3] ? `${m[2]}.${m[3]}` : m[2]}`
 }
 
 // settings の model を local -> project -> user の順に探す
@@ -131,7 +130,7 @@ export function buildFooter(input: {
   const data: J = {}
   if (entry) {
     const window = contextWindow(input.ownerDir)
-    data.model = { display_name: modelDisplayName(entry.model, window === ONE_MILLION_CONTEXT_WINDOW) }
+    data.model = { display_name: modelDisplayName(entry.model) }
     // effort はモデル名と同じ行にしか出ないため モデルが取れないときは effort も出ない
     const effort = entry.effort ?? env.CLAUDE_EFFORT
     if (effort) data.effort = { level: effort }

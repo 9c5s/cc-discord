@@ -1,5 +1,7 @@
 import { test, expect } from 'bun:test'
 import {
+  INBOUND_MAX_AGE_MS,
+  INBOUND_MAX_SKEW_MS,
   classifyInbound,
   decideDelivery,
   decideOutbound,
@@ -353,4 +355,12 @@ test('inboundFreshness は上限の内と外を区別する', () => {
   expect(inboundFreshness(snowflakeAt(NOW - 2 * 60 * 60 * 1000), NOW)).toBe('TOO_OLD')
   expect(inboundFreshness(snowflakeAt(NOW + 10 * 60 * 1000), NOW)).toBe('TOO_NEW')
   expect(inboundFreshness('abc', NOW)).toBe('INVALID_ID')
+})
+
+test('inboundFreshness は上限ちょうどを受け入れ 1 ミリ秒の超過を落とす', () => {
+  // 固定値で書くと 上限を変えたときにこの境界が検査されなくなる
+  expect(inboundFreshness(snowflakeAt(NOW - INBOUND_MAX_AGE_MS), NOW)).toBe('fresh')
+  expect(inboundFreshness(snowflakeAt(NOW - INBOUND_MAX_AGE_MS - 1), NOW)).toBe('TOO_OLD')
+  expect(inboundFreshness(snowflakeAt(NOW + INBOUND_MAX_SKEW_MS), NOW)).toBe('fresh')
+  expect(inboundFreshness(snowflakeAt(NOW + INBOUND_MAX_SKEW_MS + 1), NOW)).toBe('TOO_NEW')
 })

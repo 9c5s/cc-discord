@@ -18,7 +18,7 @@ import { isSnowflake } from './ids'
 import { botToken, ownerName } from './notify'
 import { inspectOfficial, officialPluginDir } from './official'
 import { createOwnerResolver } from './owner-resolver'
-import { writeProgressBody, writeTarget } from './progress-target'
+import { deleteTarget, writeProgressBody, writeTarget } from './progress-target'
 import { createWriter, readJsonLines, type Json, type Writer } from './relay'
 import { handleEditMessage, handleReply } from './reply'
 import { stateDir } from './routes'
@@ -220,7 +220,7 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
   // 途中で止まっても 配送されない通知の宛先を watcher に見せない
   if (location && activation) {
     writeProgressBody(owner, location.id)
-    writeTarget(owner, {
+    const published = writeTarget(owner, {
       ...location,
       session_id: activation.sessionId,
       run_id: ctx.runId as string,
@@ -228,6 +228,12 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
       message_id: messageId,
       written_at: (ctx.now ?? Date.now)(),
     })
+    // 公開に失敗したまま前の宛先を残すと このやり取りの進捗が前のスレッドへ出る
+    // 進捗が欠けるほうを選ぶ (置き換えは rename なので 読み手と競合すると失敗しうる)
+    if (!published) {
+      ctx.log('failed to publish the progress target')
+      deleteTarget(owner, activation.activationId)
+    }
   }
 
   ctx.toClient.write(raw)

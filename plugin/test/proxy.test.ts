@@ -12,7 +12,7 @@ import {
   type ProxyContext,
 } from '../src/proxy'
 import { readHeartbeat, readPointer, writeHeartbeat, writePointer, type Pointer } from '../src/activation'
-import { listTargets, readProgressBody, readTarget, writeTarget } from '../src/progress-target'
+import { listTargets, progressDir, readProgressBody, readTarget, writeTarget } from '../src/progress-target'
 import type { ApiResult, DiscordClient } from '../src/discord-api'
 import type { Access } from '../src/access'
 import type { Json, Writer } from '../src/relay'
@@ -285,6 +285,18 @@ test('handleServerMessage は best effort の失敗でも通知を転送する',
   expect(h.toClient).toEqual([raw(msg)])
   // アンカーを作れないときは親チャンネルへ退避する
   expect(readTarget(OWNER, ACT)?.id).toBe(CH)
+})
+
+test('handleServerMessage は宛先の公開に失敗したら記録して前の宛先を残さない', async () => {
+  // 公開に失敗したまま前の宛先が残ると このやり取りの進捗が前のスレッドへ出る
+  // 置き換えは rename なので 読み手と競合すると失敗しうる
+  writePointer(pointer())
+  mkdirSync(join(progressDir(), `${OWNER}.${ACT}.meta`), { recursive: true })
+  const h = harness()
+  const msg = notification()
+  await handleServerMessage(msg, raw(msg), h.ctx)
+  expect(h.logs.join(' ')).toContain('failed to publish the progress target')
+  expect(h.toClient).toEqual([raw(msg)])
 })
 
 test('handleServerMessage は現行 activation が無ければスレッドを作らずに転送する', async () => {

@@ -40,11 +40,15 @@ export function createProgressSender(deps: SenderDeps): { send(text: string): Pr
   const log = deps.log ?? ((): void => {})
 
   // activation の確認
-  // heartbeat が自分の run のもので鮮度内 かつ ポインタの activation が一致することを要求する
-  const activationHolds = (): boolean => {
+  // ポインタが別の activation を指していたら この watcher の役目は終わっている
+  const pointerHolds = (): boolean =>
+    readPointer(deps.claudePid)?.activation_id === deps.activationId
+
+  // heartbeat が自分の run のもので鮮度内であることを確かめる
+  // 失効は終了の合図にしない (サスペンドからの復帰や MCP だけの再起動では書き直しが遅れるだけである)
+  const heartbeatHolds = (): boolean => {
     const beat = readHeartbeat(deps.claudePid, deps.runId)
-    if (!beat || !isFresh(beat.written_at, HEARTBEAT_TTL_MS, now())) return false
-    return readPointer(deps.claudePid)?.activation_id === deps.activationId
+    return beat !== null && isFresh(beat.written_at, HEARTBEAT_TTL_MS, now())
   }
 
   // 宛先の実体を取得して要求した id と一致することを確かめる
@@ -95,7 +99,11 @@ export function createProgressSender(deps: SenderDeps): { send(text: string): Pr
 
     // 429 の待機後は新しい送信試行として最初からやり直す
     for (let attempt = 0; attempt < 2; attempt++) {
-      if (!activationHolds()) return 'terminated'
+      if (!pointerHolds()) return 'terminated'
+      if (!heartbeatHolds()) {
+        log('progress skip: the heartbeat is stale')
+        return 'dropped'
+      }
 
       const target = readTarget(deps.owner, deps.activationId)
       if (!target || !isActiveFor(target, deps.activationId, now())) {
@@ -117,7 +125,11 @@ export function createProgressSender(deps: SenderDeps): { send(text: string): Pr
       }
 
       // 最終再確認の後は await を挟まずに POST を始める
-      if (!activationHolds()) return 'terminated'
+      if (!pointerHolds()) return 'terminated'
+      if (!heartbeatHolds()) {
+        log('progress skip: the heartbeat is stale')
+        return 'dropped'
+      }
       const res = await deps.api.createMessage(
         target.id,
         { content, flags: SUPPRESS_NOTIFICATIONS, allowed_mentions: { parse: [] } },

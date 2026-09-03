@@ -22,6 +22,11 @@ Manages access control for the Discord channel. All state lives in
 `~/.claude/channels/discord/access.json`. You never talk to Discord — you
 just edit JSON; the channel server re-reads it.
 
+Paths below use the default state directory `~/.claude/channels/discord`. If
+`DISCORD_STATE_DIR` is set in the environment, substitute it everywhere — the
+runtime resolves every state file through that variable, so writing to the
+default would silently have no effect.
+
 Arguments passed: `$ARGUMENTS`
 
 ---

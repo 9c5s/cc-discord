@@ -14,6 +14,11 @@ allowed-tools:
 Writes the bot token to `~/.claude/channels/discord/.env` and orients the
 user on access policy. The server reads both files at boot.
 
+Paths below use the default state directory `~/.claude/channels/discord`. If
+`DISCORD_STATE_DIR` is set in the environment, substitute it everywhere — the
+runtime resolves every state file through that variable, so writing to the
+default would silently have no effect.
+
 Arguments passed: `$ARGUMENTS`
 
 ---

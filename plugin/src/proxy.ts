@@ -136,8 +136,11 @@ async function resolveActivation(ctx: ProxyContext): Promise<{ sessionId: string
 
 // server -> client ---
 // 通知の処理は 判定段階 (失敗したら破棄) と best effort 段階 (失敗してもログを残して転送) に分ける
+
+const CHANNEL_NOTIFICATION = 'notifications/claude/channel'
+
 export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyContext): Promise<void> {
-  if (msg.method !== 'notifications/claude/channel') {
+  if (msg.method !== CHANNEL_NOTIFICATION) {
     ctx.toClient.write(JSON.stringify(ctx.rewriter.rewrite(msg)))
     return
   }
@@ -226,6 +229,24 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
   }
 
   ctx.toClient.write(raw)
+}
+
+// 子からのメッセージを中継のループから切り離す
+// 通知の処理はチャンネル実体の取得 担当解決 スレッドの作成と REST を重ねるため 秒単位で待つことがある
+// 中継のループはハンドラを待ってから次の行へ進むので そのまま載せると
+// 子が既に書いた tools/call や initialize の応答が通知の後ろで滞り Claude Code 側がタイムアウトする
+// 通知どうしの順序だけはキューで保つ (ロックの取得と宛先の書き込みが前後しないようにする)
+export function createServerMessagePump(ctx: ProxyContext): (msg: Json, raw: string) => void {
+  let chain: Promise<void> = Promise.resolve()
+  return (msg: Json, raw: string): void => {
+    if (msg.method !== CHANNEL_NOTIFICATION) {
+      void handleServerMessage(msg, raw, ctx).catch((e) => ctx.log(`relaying the child message failed: ${e}`))
+      return
+    }
+    chain = chain
+      .then(() => handleServerMessage(msg, raw, ctx))
+      .catch((e) => ctx.log(`handling the inbound failed: ${e}`))
+  }
 }
 
 // client -> server ---
@@ -436,8 +457,9 @@ function main(): void {
     log,
   }
 
+  const pump = createServerMessagePump(ctx)
   readJsonLines(child.stdout, {
-    onMessage: (msg, raw) => handleServerMessage(msg, raw, ctx),
+    onMessage: (msg, raw) => pump(msg, raw),
     onInvalid: (line) => process.stderr.write(`cc-discord: dropping a non JSON line from the child: ${line.slice(0, 200)}\n`),
     onEnd: () => shutdown(),
   })

@@ -48,6 +48,12 @@ test('versionOf は installPath の末尾ディレクトリ名を版として返
   expect(versionOf('/cache/claude-plugins-official/discord/0.0.4/')).toBe('0.0.4')
 })
 
+test('versionOf は区切りが混在していても末尾を返す', () => {
+  // ホストの区切りに依存しないことを固定する (POSIX 上でも Windows のパスを解析できる)
+  expect(versionOf('C:\\cache/claude-plugins-official\\discord/0.0.4')).toBe('0.0.4')
+  expect(versionOf('C:\\cache\\discord\\0.0.4\\')).toBe('0.0.4')
+})
+
 // --- isSupportedServer ---
 
 test('isSupportedServer は対応表にある版と hash を受け入れる', () => {

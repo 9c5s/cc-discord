@@ -106,7 +106,7 @@ function sender(over: Record<string, unknown> = {}) {
       await (over.onWait as (() => Promise<void>) | undefined)?.()
     },
   })
-  return { send: s.send, posted: f.posted, waits }
+  return { send: s.send, posted: f.posted, waits, channels: f.channels }
 }
 
 // 有効な activation と宛先を用意する
@@ -128,6 +128,29 @@ test('createProgressSender は有効な宛先へ投稿する', async () => {
   // 進捗は通知を出さず メンションも解決しない
   expect(s.posted[0].payload.flags).toBe(4096)
   expect(s.posted[0].payload.allowed_mentions).toEqual({ parse: [] })
+})
+
+test('createProgressSender は gate の待ちの間に差し替わった宛先へ送り直す', async () => {
+  // 次の inbound が .meta を上書きしたのに気付かず 前のスレッドへ投稿するのを防ぐ
+  setupActive()
+  const nextThread = '20000000000000002'
+  let swapped = false
+  const s = sender({
+    api: {
+      getGuilds: async () => {
+        if (!swapped) {
+          swapped = true
+          writeTarget(OWNER, target({ id: nextThread }))
+        }
+        return { ok: true as const, value: [{ id: GUILD }] }
+      },
+    },
+  })
+  s.channels[nextThread] = { id: nextThread, type: 11, parent_id: CH }
+
+  expect(await s.send('progress')).toBe('sent')
+  expect(s.posted).toHaveLength(1)
+  expect(s.posted[0].channelId).toBe(nextThread)
 })
 
 test('createProgressSender は空の本文を送らない', async () => {

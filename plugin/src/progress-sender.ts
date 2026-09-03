@@ -108,6 +108,14 @@ export function createProgressSender(deps: SenderDeps): { send(text: string): Pr
         return 'dropped'
       }
 
+      // gate の待ちの間に 同じ activation の次の inbound が宛先を差し替えていることがある
+      // そのまま投稿すると 進捗が前のやり取りのスレッドへ出るので 読み直してからやり直す
+      const current = readTarget(deps.owner, deps.activationId)
+      if (!current || current.id !== target.id) {
+        log('progress retry: the target changed while checking the gate')
+        continue
+      }
+
       // 最終再確認の後は await を挟まずに POST を始める
       if (!activationHolds()) return 'terminated'
       const res = await deps.api.createMessage(

@@ -315,6 +315,17 @@ test('handleReply は 10 件を超える添付を読み込む前に拒否する'
   expect(d.sent).toHaveLength(0)
 })
 
+test('handleReply は通常ファイル以外の添付を拒否する', async () => {
+  // FIFO やデバイスは size が 0 に見えるためサイズの検査を通り 同期の読み取りで proxy ごと止まりうる
+  const dir = join(testTmpDir, 'not-a-file')
+  mkdirSync(dir, { recursive: true })
+  const d = deps()
+  const res = await handleReply({ chat_id: CH, text: 'hi', files: [dir] }, d.deps)
+  expect(res.isError).toBe(true)
+  expect(res.content[0].text).toContain('not a regular file')
+  expect(d.sent).toHaveLength(0)
+})
+
 test('handleReply は state dir 配下のファイルを拒否する', async () => {
   const f = join(process.env.DISCORD_STATE_DIR as string, '.env')
   writeFileSync(f, 'secret')

@@ -316,7 +316,7 @@ test('refreshModelUsage は週次値とモデル別枠と時刻を書き込む',
   const p = tmpFile('cache.json')
   const entries: ModelUsageEntry[] = [{ display_name: 'Fable', percent: 88, resets_at: null }]
   const weekly = { used_percentage: 51, resets_at: 1787454000 }
-  await refreshModelUsage(p, async () => ({ weekly, modelScoped: entries }))
+  await refreshModelUsage(p, async () => ({ weekly, session: null, modelScoped: entries }))
   const c = readJson(p)
   expect(c.data).toEqual(entries)
   expect(c.weekly).toEqual(weekly)
@@ -370,9 +370,10 @@ test('ensureFresh は 60 秒より古いキャッシュで更新を起動する'
   expect(spawned).toBe(true)
 })
 
-test('ensureFresh は 60 秒以内のキャッシュでは起動しない', () => {
+test('ensureFresh は保持時間の内のキャッシュでは起動しない', () => {
+  // 境界の 1 秒手前に置くと 実行が 1 秒ずれただけで結果が変わる
   const p = tmpFile('cache.json')
-  writeJson(p, { _cached_at: nowSec() - 59, _attempted_at: 0, data: [] })
+  writeJson(p, { _cached_at: nowSec() - 1, _attempted_at: 0, data: [] })
   let spawned = false
   ensureFresh(p, () => {
     spawned = true

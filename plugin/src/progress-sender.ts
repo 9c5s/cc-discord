@@ -17,6 +17,8 @@ const MAX_CONTENT_POINTS = 1900
 // 429 の待ちに付き合う上限
 // これを超える待ちは諦める (途中経過は遅れて届いても価値が薄く 待つ間に activation も変わりやすい)
 const MAX_RETRY_WAIT_MS = 10_000
+// 1 チャンクあたりの POST の回数 (429 で 1 度だけ待って送り直す)
+const MAX_SEND_ATTEMPTS = 2
 
 export type SendOutcome = 'sent' | 'dropped' | 'terminated'
 
@@ -98,7 +100,7 @@ export function createProgressSender(deps: SenderDeps): { send(text: string): Pr
     const content = points.length > MAX_CONTENT_POINTS ? points.slice(0, MAX_CONTENT_POINTS).join('') : text
 
     // 429 の待機後は新しい送信試行として最初からやり直す
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < MAX_SEND_ATTEMPTS; attempt++) {
       if (!pointerHolds()) return 'terminated'
       if (!heartbeatHolds()) {
         log('progress skip: the heartbeat is stale')
@@ -143,6 +145,12 @@ export function createProgressSender(deps: SenderDeps): { send(text: string): Pr
       }
       if (res.retryAfterMs > MAX_RETRY_WAIT_MS) {
         log(`progress skip: rate limited for ${res.retryAfterMs}ms`)
+        return 'dropped'
+      }
+      // 送り直す回数が残っていないなら待たない
+      // watcher は送信を直列に待つため 送り直さない待ちは後続の進捗を止めるだけである
+      if (attempt + 1 >= MAX_SEND_ATTEMPTS) {
+        log('progress skip: rate limited on the last attempt')
         return 'dropped'
       }
       await sleep(res.retryAfterMs)

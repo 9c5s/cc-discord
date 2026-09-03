@@ -103,6 +103,8 @@ export type ProxyContext = {
   api: DiscordClient
   access: () => Access
   ownerChannelId: () => string | null
+  // 起動時の担当解決が終わったことを表す (成否は問わない)
+  ready: Promise<void>
   typing: TypingController
   claudePid: number
   runId: string | null
@@ -152,6 +154,10 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
 
   const { owner, chatId, messageId } = decision
   const channel = await ctx.api.getChannel(chatId)
+  // 起動直後は担当がまだ解決されていない
+  // 未解決のまま判定すると guild の通知が NO_OWNER_CHANNEL で捨てられるため 最初の解決を待つ
+  // 実体の取得と並行に進むので 実際に待つのは解決が長引いたときだけである
+  await ctx.ready
   const delivery = decideDelivery({
     owner,
     ownerChannelId: ctx.ownerChannelId(),
@@ -359,8 +365,12 @@ function main(): void {
   const api = createDiscordClient()
   const access = createAccessReader()
   const ownerCtx = ownerContext()
-  const resolver = createOwnerResolver({ api, access, owner, log })
+  const resolver = createOwnerResolver({ api, access, owner, runId, log })
   const typing = createTypingController(api, { onError: log })
+
+  // 担当解決は子の起動を待たずに始める
+  // 例外は捕まえてログに残す (担当を持たないまま fail closed で進む方が 中継ごと終了させるより安全である)
+  const ready = resolver.resolve().catch((e) => log(`the initial resolution failed: ${e}`))
 
   log(`start pid=${process.pid} ppid=${claudePid} owner=${owner || '(none)'} official=${installPath}`)
 
@@ -395,6 +405,7 @@ function main(): void {
     api,
     access,
     ownerChannelId: () => resolver.channelId(),
+    ready,
     typing,
     claudePid,
     runId,
@@ -446,7 +457,8 @@ function main(): void {
     if (archived.length > 0) log(`archived ${archived.length} stale thread(s)`)
   }
 
-  void resolver.resolve().then(archive)
+  // 最初の archive は担当解決の後に 1 回だけ行う (解決の開始は上で済ませてある)
+  void ready.then(archive)
 
   // 終了処理 ---
   let cleaned = false

@@ -27,8 +27,10 @@ export function sha256File(path: string): string | null {
 }
 
 // installPath の末尾ディレクトリ名を版として返す
+// basename はホスト OS の区切りしか見ないため 先に区切りを / へ寄せてから切り出す
+// (Windows で採取したパスを POSIX 上で解析しても同じ版を返す)
 export function versionOf(installPath: string): string {
-  return basename(installPath.replace(/[\\/]+$/, ''))
+  return basename(installPath.replace(/\\/g, '/').replace(/\/+$/, ''))
 }
 
 // 版と hash が対応表に載っているかを判定する

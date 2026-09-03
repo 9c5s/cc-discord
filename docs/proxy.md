@@ -88,12 +88,17 @@ function claude {
   [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
   $env:CC_DISCORD_RUN_ID = ($bytes | ForEach-Object { $_.ToString('x2') }) -join ''
   try {
-    & "~/.local/bin/claude.exe" --dangerously-skip-permissions --channels plugin:cc-discord@cc-discord @args
+    & "~/.local/bin/claude.exe" --channels plugin:cc-discord@cc-discord @args
   } finally {
     if ($null -eq $prev) { Remove-Item Env:CC_DISCORD_RUN_ID -ErrorAction SilentlyContinue } else { $env:CC_DISCORD_RUN_ID = $prev }
   }
 }
 ```
+
+この例には権限モードの指定を入れていない。
+cc-discord が要求するのは `--channels` だけで、承認をどこまで省くかは環境ごとの判断になる。
+承認を飛ばすモードで動かすなら、隔離した環境と専用のアカウントを用意する。
+`access.json` と `allowedChannelPlugins` は誰がどのチャンネルから話しかけられるかを絞るだけで、ツール実行の承認までは戻さない。
 
 `run_id` は起動インスタンスの識別子である。
 proxy は自分の親プロセス (Claude Code) の PID と組み合わせて、どの起動のどの activation に属するかを判定する。
@@ -442,8 +447,17 @@ proxy はこの前提を覆す立場になく、破棄すると公式機能を�
 25MB 弱のファイルを 10 個添付されると、multipart を組む前に 250MB 近いバッファを抱える、という指摘があった。
 
 Claude が `reply` に付けるのはスクリーンショットや抜粋したログで、この規模にはならない。
-仮に届いても Discord 側が 1 メッセージあたりの合計で拒否するため、送信は成功しない。
+仮に届いても、Discord は 1 メッセージのリクエスト全体を 25 MiB で制限するため送信は成功しない。
 take over は公式と同じ検査に揃えてあり、そこへ独自の上限を足すと、同じ入力に対する挙動が公式と分かれる。
+
+### access.json の更新にロックを持ち込まない
+
+`access.json` は skill が読み書きし、公式 server も `pairing` の `pending` を書く。
+どちらも読み込みから書き戻しまでの間に相手の更新を落としうるため、共有ロック付きの更新境界へまとめるべき、という指摘があった。
+
+access の管理は公式 server と skill の領分で、proxy は読むだけである。
+片方だけがロックを守っても競合は消えず、公式のコピーである skill に規約を足すと、上流が変わるたびに追随する対象が増える。
+競合の窓は「ペアリングの承認と未知の DM の到着が重なる」ときに限られ、落ちた側はもう一度ペアリングすれば復旧する。
 
 ### take over 中の要求のキャンセルを追わない
 
@@ -545,6 +559,8 @@ compaction は同じプロセスの中で起きるため、起動ディレクト
   メンションを必須にしているチャンネルでのみ影響する。
 - 担当外のセッションの公式 server が行う入力中表示 1 回と、リアクションによる受領通知、ペアリングの応答は、proxy 層では止められない。
 - `--model` の CLI 指定は proxy から読めないため、その場合のコンテキスト使用率の分母は settings 由来のままになる。
+- 送信可否の判定はチャンネル実体と guild 一覧を 60 秒キャッシュするため、担当が変わった直後は最大 60 秒、古い判定のまま送れる。
+  担当の解決自体が 60 秒周期なので、キャッシュを迂回しても同じ幅で古い担当が残る。
 - 5 時間枠と 7 日枠の値はキャッシュ経由で、通常は 60 秒以内、更新に失敗し続けた場合は最大 15 分の遅れがある。
 - 上流の更新 (自動更新を含む) の直後は、対応表を更新するまで新しいセッションが Discord 無しになる。
 - inbound の後にそのセッションで行ったローカルの作業は、次の inbound、activation の切り替え、proxy の終了、12 時間のいずれかまで、同じスレッドへ転送される (意図した挙動)。

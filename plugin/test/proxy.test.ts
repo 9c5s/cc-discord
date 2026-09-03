@@ -6,6 +6,7 @@ import {
   absolutizeStateDir,
   cleanupRun,
   createInitializeRewriter,
+  createServerMessagePump,
   handleClientMessage,
   handleServerMessage,
   type ProxyContext,
@@ -399,6 +400,62 @@ function target(activationId: string, runId: string): Parameters<typeof writeTar
     written_at: NOW,
   }
 }
+
+// --- 中継の切り離し ---
+
+test('createServerMessagePump は通知の処理を待たずに応答を流す', async () => {
+  // 通知は REST を重ねるため 中継のループに載せると応答が後ろで滞る
+  writePointer(pointer())
+  let started = false
+  let release = (): void => {}
+  const gate = new Promise<void>((r) => {
+    release = r
+  })
+  const h = harness({
+    api: {
+      getChannel: async (id: string) => {
+        started = true
+        await gate
+        return { ok: true as const, value: { id, type: 0 } }
+      },
+    },
+  })
+  const pump = createServerMessagePump(h.ctx)
+
+  const msg = notification()
+  pump(msg, raw(msg))
+  const response: Json = { jsonrpc: '2.0', id: 9, result: {} }
+  pump(response, raw(response))
+  await new Promise((r) => setTimeout(r, 0))
+
+  // 通知は処理中のまま 応答だけが先に出ている
+  expect(started).toBe(true)
+  expect(h.toClient).toEqual([raw(response)])
+  release()
+})
+
+test('createServerMessagePump は通知どうしの順序を保つ', async () => {
+  writePointer(pointer())
+  const order: string[] = []
+  const h = harness({
+    api: {
+      getChannel: async (id: string) => {
+        order.push(`start ${id}`)
+        await new Promise((r) => setTimeout(r, 0))
+        return { ok: false as const, error: 'http 404' }
+      },
+    },
+  })
+  const pump = createServerMessagePump(h.ctx)
+
+  const first = notification({ message_id: String(BigInt(MSG) + 1n) })
+  const second = notification({ chat_id: DM_CH, message_id: String(BigInt(MSG) + 2n) })
+  pump(first, raw(first))
+  pump(second, raw(second))
+  await new Promise((r) => setTimeout(r, 10))
+
+  expect(order).toEqual([`start ${CH}`, `start ${DM_CH}`])
+})
 
 test('absolutizeStateDir は相対の DISCORD_STATE_DIR を絶対パスへ直す', () => {
   // 子は --cwd で公式プラグインのディレクトリへ移るため 相対のままだと別の場所を見る

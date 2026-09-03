@@ -287,13 +287,15 @@ test('handleServerMessage は best effort の失敗でも通知を転送する',
   expect(readTarget(OWNER, ACT)?.id).toBe(CH)
 })
 
-test('handleServerMessage は現行 activation が無ければ宛先を書かずに転送する', async () => {
+test('handleServerMessage は現行 activation が無ければスレッドを作らずに転送する', async () => {
+  // 宛先を書けず watcher も動かないため 作っても誰も使わない空のスレッドが残るだけである
   const h = harness()
   const msg = notification()
   await handleServerMessage(msg, raw(msg), h.ctx)
   expect(h.toClient).toEqual([raw(msg)])
   expect(listTargets(OWNER)).toEqual([])
-  expect(readProgressBody(OWNER)).toBe(THREAD)
+  expect(readProgressBody(OWNER)).toBe(null)
+  expect(h.posted).toHaveLength(0)
 })
 
 test('handleServerMessage は run_id を持たないセッションで宛先を書かない', async () => {

@@ -181,20 +181,26 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
   }
 
   // ここから先は best effort である (失敗しても通知は転送する)
-  // 待ちを伴う準備 (スレッドの作成と activation の解決) だけを先に済ませ ファイルにはまだ書かない
+  // 待ちを伴う準備 (activation の解決とスレッドの作成) だけを先に済ませ ファイルにはまだ書かない
+  // activation が無いセッションではスレッドを作らない
+  // 宛先を書けず watcher も動かないため 作っても誰も使わない空のスレッドが残るだけである
   let location: TargetLocation | null = null
   let activation: { sessionId: string; activationId: string } | null = null
   try {
     ctx.typing.start(chatId)
-    const content = typeof params.content === 'string' ? params.content : ''
-    location = await createProgressTarget(ctx.api, {
-      chatId,
-      kind: delivery.kind,
-      parentId: delivery.parentId,
-      content,
-      ts: new Date(),
-    })
     activation = await resolveActivation(ctx)
+    if (activation) {
+      const content = typeof params.content === 'string' ? params.content : ''
+      location = await createProgressTarget(ctx.api, {
+        chatId,
+        kind: delivery.kind,
+        parentId: delivery.parentId,
+        content,
+        ts: new Date(),
+      })
+    } else {
+      ctx.log('no current activation: the progress thread was not created')
+    }
   } catch (e) {
     ctx.log(`inbound side effects failed: ${e}`)
   }
@@ -212,20 +218,16 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
 
   // 宛先の公開と配送は待ちを挟まずに続けて行う
   // 途中で止まっても 配送されない通知の宛先を watcher に見せない
-  if (location) {
+  if (location && activation) {
     writeProgressBody(owner, location.id)
-    if (activation) {
-      writeTarget(owner, {
-        ...location,
-        session_id: activation.sessionId,
-        run_id: ctx.runId as string,
-        activation_id: activation.activationId,
-        message_id: messageId,
-        written_at: (ctx.now ?? Date.now)(),
-      })
-    } else {
-      ctx.log('no current activation: the progress target was not written')
-    }
+    writeTarget(owner, {
+      ...location,
+      session_id: activation.sessionId,
+      run_id: ctx.runId as string,
+      activation_id: activation.activationId,
+      message_id: messageId,
+      written_at: (ctx.now ?? Date.now)(),
+    })
   }
 
   ctx.toClient.write(raw)

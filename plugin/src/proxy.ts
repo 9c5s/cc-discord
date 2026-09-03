@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 import { spawn } from 'child_process'
 import { appendFileSync, mkdirSync } from 'fs'
-import { join } from 'path'
+import { isAbsolute, join, resolve } from 'path'
 import { createAccessReader, type Access } from './access'
-import { currentActivation, deleteHeartbeat, deletePointer, readPointer, writeHeartbeat } from './activation'
+import { currentActivation, deleteHeartbeat, writeHeartbeat } from './activation'
 import { createDiscordClient, type DiscordClient } from './discord-api'
 import { buildFooter } from './footer'
 import {
@@ -311,11 +311,13 @@ export async function handleClientMessage(msg: Json, raw: string, ctx: ProxyCont
 
 // 終了時の後片付け ---
 // 自分の run のものだけを消す (他の起動や他のセッションの状態には触れない)
-// 異常終了で残っても heartbeat は 15 秒 宛先は 12 時間で失効し ポインタは次の SessionStart の掃除で消える
+// 異常終了で残っても heartbeat は 15 秒 宛先は 12 時間で失効する
+// ポインタは正常終了でも消さない
+// MCP だけが再起動される経路 (/reload-plugins など) では SessionStart が発火せず 誰も作り直さないためである
+// 消すと以後の inbound が進捗の宛先を持てなくなる一方 残しても run_id の照合と heartbeat の失効で誤用は防げる
 export function cleanupRun(args: { claudePid: number; runId: string | null; owner: string }): void {
   if (!args.runId) return
   deleteHeartbeat(args.claudePid, args.runId)
-  if (readPointer(args.claudePid)?.run_id === args.runId) deletePointer(args.claudePid)
   if (!args.owner) return
   for (const entry of listTargets(args.owner)) {
     if (entry.target.run_id === args.runId) deleteTarget(args.owner, entry.activationId)
@@ -324,7 +326,17 @@ export function cleanupRun(args: { claudePid: number; runId: string | null; owne
 
 // 配線 ---
 
+// 相対の DISCORD_STATE_DIR を絶対パスへ直す
+// 子は --cwd で公式プラグインのディレクトリへ移るため 相対のままだと proxy と別の場所を state dir とみなす
+export function absolutizeStateDir(env: NodeJS.ProcessEnv): void {
+  const dir = env.DISCORD_STATE_DIR
+  if (dir && !isAbsolute(dir)) env.DISCORD_STATE_DIR = resolve(dir)
+}
+
 function main(): void {
+  // 子を起動する前に直す (以後の state dir の解決をすべて絶対パスで揃える)
+  absolutizeStateDir(process.env)
+
   // 検証用の上書き: セッションの起動ディレクトリとは別の担当名で子 server を動かす
   const override = process.env.CC_DISCORD_PROJECT_DIR
   if (override) process.env.CLAUDE_PROJECT_DIR = override

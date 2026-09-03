@@ -145,6 +145,24 @@ test('createWatcher は起動前の内容を投稿しない', async () => {
   expect(v.sent).toEqual([])
 })
 
+test('createWatcher は heartbeat が失効している間 transcript を読み進めない', async () => {
+  // 読み取り位置だけ進めると 送信側が同じ理由で諦めた分を取り戻せない
+  writeHeartbeat(PID, RUN, NOW)
+  writePointer(pointer())
+  const v = watcher()
+  v.w.tick()
+
+  v.advance(15_001)
+  appendFileSync(v.transcriptPath, ASSISTANT('復帰待ちの追記'))
+  await v.w.poll()
+  expect(v.sent).toEqual([])
+
+  writeHeartbeat(PID, RUN, NOW + 15_001)
+  await v.w.poll()
+  expect(v.sent).toHaveLength(1)
+  expect(v.sent[0]).toContain('復帰待ちの追記')
+})
+
 test('createWatcher は heartbeat が失効したら待機へ戻る', () => {
   // サスペンドからの復帰直後と MCP だけの再起動では proxy の書き直しが tick より遅れる
   writeHeartbeat(PID, RUN, NOW)

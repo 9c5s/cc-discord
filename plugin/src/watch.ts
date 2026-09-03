@@ -214,6 +214,10 @@ export function createWatcher(deps: {
 
     async poll(): Promise<void> {
       if (state !== 'ACTIVE' || polling) return
+      // heartbeat が失効している間は transcript を読まない
+      // 読み取り位置だけ進めても 送信側が同じ理由で諦めるため その分の進捗を取り戻せない
+      // 読まずに待てば proxy が書き直した後の周期でまとめて送れる
+      if (!heartbeatHolds()) return
       polling = true
       try {
         const messages: string[] = []

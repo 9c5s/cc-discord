@@ -161,6 +161,7 @@ function harness(over: Record<string, unknown> = {}): Harness {
     api,
     access: () => (over.access as Access) ?? ACCESS,
     ownerChannelId: () => (over.ownerChannelId as string | null | undefined) === undefined ? CH : (over.ownerChannelId as string | null),
+    ready: (over.ready as Promise<void> | undefined) ?? Promise.resolve(),
     typing: {
       start: (id: string) => void typingStarted.push(id),
       stop: (id: string) => void typingStopped.push(id),
@@ -211,6 +212,29 @@ test('handleServerMessage は担当外のチャンネルの通知を破棄する
   await handleServerMessage(msg, raw(msg), h.ctx)
   expect(h.toClient).toEqual([])
   expect(h.typingStarted).toEqual([])
+})
+
+test('handleServerMessage は担当解決が終わるまで inbound の判定を待つ', async () => {
+  // 起動直後は担当が未解決である
+  // 待たずに判定すると guild の通知が NO_OWNER_CHANNEL で捨てられ 再送も無いので届かないままになる
+  writePointer(pointer())
+  let resolved: string | null = null
+  let release = (): void => {}
+  const ready = new Promise<void>((res) => {
+    release = res
+  })
+  const h = harness({ ready })
+  h.ctx.ownerChannelId = () => resolved
+
+  const msg = notification()
+  const done = handleServerMessage(msg, raw(msg), h.ctx)
+  await new Promise((r) => setTimeout(r, 0))
+  expect(h.toClient).toEqual([])
+
+  resolved = CH
+  release()
+  await done
+  expect(h.toClient).toEqual([raw(msg)])
 })
 
 test('handleServerMessage は担当なしのセッションでは通知を素通しする', async () => {

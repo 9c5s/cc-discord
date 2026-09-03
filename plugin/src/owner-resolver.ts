@@ -29,6 +29,7 @@ export function createOwnerResolver(deps: {
   api: DiscordClient
   access: () => Access
   owner: string
+  runId: string | null
   now?: () => number
   log?: (msg: string) => void
 }): OwnerResolver {
@@ -44,7 +45,10 @@ export function createOwnerResolver(deps: {
   let running = false
 
   // route の更新と 担当に紐づく宛先の削除
-  // 宛先は guild のものだけを消す (DM は guild の担当に依存しない)
+  // 消すのは自分の run の guild 宛先だけである (DM は guild の担当に依存しない)
+  // 並走する他セッションの宛先まで消すと そのセッションの進捗が次の inbound まで止まる
+  // 他セッションも同じ REST の結果から同じ判断に至るため こちらから触る必要は無い
+  // 本体 (progress-thread/<owner>) だけは run を区別できないので 担当を失った時点で消す
   // 失敗した周期は未反映として記録し 次の周期で再試行する
   const applyFiles = (next: string | null, dropTargets: boolean): void => {
     let ok = true
@@ -62,6 +66,7 @@ export function createOwnerResolver(deps: {
       ok = deleteProgressBody(deps.owner) && ok
       for (const entry of listTargets(deps.owner)) {
         if (entry.target.kind !== 'guild') continue
+        if (entry.target.run_id !== deps.runId) continue
         ok = deleteTarget(deps.owner, entry.activationId) && ok
       }
     }

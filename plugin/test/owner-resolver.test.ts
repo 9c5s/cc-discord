@@ -31,6 +31,8 @@ const THREAD = '44444444444444444'
 const ACT = 'b'.repeat(32)
 const DM_ACT = 'c'.repeat(32)
 const RUN = 'a'.repeat(32)
+const OTHER_ACT = 'd'.repeat(32)
+const OTHER_RUN = 'e'.repeat(32)
 const SESSION = '57db69e6-bf68-407b-8958-680297cb447f'
 const MSG = '99999999999999999'
 const NOW = 1_800_000_000_000
@@ -66,6 +68,7 @@ function resolver(over: Record<string, unknown> = {}) {
     api: fakeApi((over.api as Record<string, unknown>) ?? {}),
     access: (over.access as () => Access) ?? (() => ACCESS),
     owner: OWNER,
+    runId: 'runId' in over ? (over.runId as string | null) : RUN,
     now: (over.now as () => number) ?? (() => NOW),
     log: (m: string) => void logs.push(m),
   })
@@ -107,10 +110,12 @@ test('createOwnerResolver は担当が別チャンネルへ移ったら route �
     api: fakeApi({ getGuildChannels: async () => ({ ok: true, value: channels }) }),
     access: () => ({ allowFrom: [], groups: { [CH]: {}, [OTHER_CH]: {} } }) as Access,
     owner: OWNER,
+    runId: RUN,
     now: () => NOW,
   })
   await r.resolve()
   writeTarget(OWNER, target())
+  writeTarget(OWNER, target({ run_id: OTHER_RUN, activation_id: OTHER_ACT }))
   writeProgressBody(OWNER, THREAD)
 
   channels = [{ id: OTHER_CH, name: 'proj', type: 0 }]
@@ -118,7 +123,23 @@ test('createOwnerResolver は担当が別チャンネルへ移ったら route �
   expect(r.channelId()).toBe(OTHER_CH)
   expect(readRoute(OWNER)).toBe(OTHER_CH)
   expect(readTarget(OWNER, ACT)).toBe(null)
+  // 他のセッションは自分の resolver で同じ判断に至るため こちらからは触らない
+  expect(readTarget(OWNER, OTHER_ACT)).not.toBe(null)
   expect(readProgressBody(OWNER)).toBe(null)
+})
+
+test('createOwnerResolver は担当を手放しても他の run の宛先は残す', async () => {
+  // 同じ担当で並走する他セッションの進捗を止めないため 消すのは自分の run の宛先だけである
+  const { r } = resolver()
+  await r.resolve()
+  writeTarget(OWNER, target())
+  writeTarget(OWNER, target({ run_id: OTHER_RUN, activation_id: OTHER_ACT }))
+
+  const gone = resolver({ api: { getGuildChannels: async () => ({ ok: true, value: [] }) } })
+  await gone.r.resolve()
+  expect(gone.r.channelId()).toBe(null)
+  expect(readTarget(OWNER, ACT)).toBe(null)
+  expect(readTarget(OWNER, OTHER_ACT)).not.toBe(null)
 })
 
 test('createOwnerResolver は起動直後の確定では宛先を消さない', async () => {
@@ -149,6 +170,7 @@ test('createOwnerResolver は access.groups から外れた担当を REST を待
     }),
     access: () => ({ allowFrom: [], groups: {} }),
     owner: OWNER,
+    runId: RUN,
     now: () => NOW,
   })
   // 直前の担当を持たせるため 1 度解決してから access を空にする

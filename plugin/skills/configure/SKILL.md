@@ -101,4 +101,7 @@ Delete the `DISCORD_BOT_TOKEN=` line (or the file if that's the only line).
 - The server reads `.env` once at boot. Token changes need a session restart
   or `/reload-plugins`. Say so after saving.
 - `access.json` is re-read on every inbound message — policy changes via
-  `/cc-discord:access` take effect immediately, no restart.
+  `/cc-discord:access` take effect immediately, no restart. The exception is
+  `DISCORD_ACCESS_MODE=static`: every running process keeps the snapshot it
+  read at boot, so a revoked sender stays allowed until each session is
+  restarted. Say so when that mode is set.

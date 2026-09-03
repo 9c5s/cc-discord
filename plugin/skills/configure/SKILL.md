@@ -7,7 +7,7 @@ allowed-tools:
   - Write
   - Bash(ls *)
   - Bash(mkdir *)
-  - Bash(chmod *)
+  - Bash(chmod 600 *)
 ---
 
 # /cc-discord:configure — Discord Channel Setup

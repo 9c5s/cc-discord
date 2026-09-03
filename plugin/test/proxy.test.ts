@@ -1,8 +1,9 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test'
 import { mkdirSync, rmSync } from 'fs'
-import { join } from 'path'
+import { isAbsolute, join, resolve } from 'path'
 import { tmpdir } from 'os'
 import {
+  absolutizeStateDir,
   cleanupRun,
   createInitializeRewriter,
   handleClientMessage,
@@ -399,20 +400,38 @@ function target(activationId: string, runId: string): Parameters<typeof writeTar
   }
 }
 
-test('cleanupRun は自分の run の heartbeat とポインタと宛先を消す', () => {
+test('absolutizeStateDir は相対の DISCORD_STATE_DIR を絶対パスへ直す', () => {
+  // 子は --cwd で公式プラグインのディレクトリへ移るため 相対のままだと別の場所を見る
+  const env: NodeJS.ProcessEnv = { DISCORD_STATE_DIR: 'state' }
+  absolutizeStateDir(env)
+  expect(isAbsolute(env.DISCORD_STATE_DIR as string)).toBe(true)
+  expect(env.DISCORD_STATE_DIR).toBe(resolve('state'))
+})
+
+test('absolutizeStateDir は絶対パスと未設定に触らない', () => {
+  const abs: NodeJS.ProcessEnv = { DISCORD_STATE_DIR: join(testTmpDir, 'state') }
+  absolutizeStateDir(abs)
+  expect(abs.DISCORD_STATE_DIR).toBe(join(testTmpDir, 'state'))
+
+  const none: NodeJS.ProcessEnv = {}
+  absolutizeStateDir(none)
+  expect(none.DISCORD_STATE_DIR).toBeUndefined()
+})
+
+test('cleanupRun は自分の run の heartbeat と宛先を消す', () => {
   writeHeartbeat(PID, RUN, NOW)
-  writePointer(pointer())
   writeTarget(OWNER, target(ACT, RUN))
   cleanupRun({ claudePid: PID, runId: RUN, owner: OWNER })
   expect(readHeartbeat(PID, RUN)).toBe(null)
-  expect(readPointer(PID)).toBe(null)
   expect(readTarget(OWNER, ACT)).toBe(null)
 })
 
-test('cleanupRun は他の run のポインタを消さない', () => {
-  writePointer(pointer({ run_id: OTHER_RUN }))
+test('cleanupRun はポインタを残す', () => {
+  // MCP だけが再起動されるときは SessionStart が発火せず 誰もポインタを作り直さない
+  // ここで消すと以後の inbound が進捗の宛先を持てなくなる
+  writePointer(pointer())
   cleanupRun({ claudePid: PID, runId: RUN, owner: OWNER })
-  expect(readPointer(PID)?.run_id).toBe(OTHER_RUN)
+  expect(readPointer(PID)?.run_id).toBe(RUN)
 })
 
 test('cleanupRun は他の run の宛先を消さない', () => {

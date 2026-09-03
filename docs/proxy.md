@@ -53,8 +53,24 @@ cc-discord/                       (リポジトリ = marketplace)
 
 ## 起動と接続
 
-channels は研究プレビュー中で、第三者プラグインを channel として使うには `--dangerously-load-development-channels plugin:cc-discord@cc-discord` が要る。
-対話セッションでは起動のたびに確認ダイアログが出る (承諾の永続化は無い)。
+channels は研究プレビュー中で、`--channels` に渡せるのは Anthropic が維持する既定の allowlist に載ったプラグインか、managed settings の `allowedChannelPlugins` で承認したプラグインだけである。
+cc-discord は第三者プラグインなので後者で承認する。
+Windows では `HKCU\SOFTWARE\Policies\ClaudeCode` の `Settings` (REG_SZ) に JSON 全体を置く。
+このキーは HKLM とファイル版の managed settings が無いときだけ読まれるため、管理者権限が要らない。
+
+```json
+{
+  "channelsEnabled": true,
+  "allowedChannelPlugins": [
+    { "marketplace": "cc-discord", "plugin": "cc-discord" }
+  ]
+}
+```
+
+`allowedChannelPlugins` は既定の allowlist を置き換えるため、公式の channel プラグインも使うならここに併記する。
+managed settings を 1 つでも置くと channels の既定が無効に変わるので、`channelsEnabled` は必ず `true` を明示する。
+
+承認せずに `--dangerously-load-development-channels plugin:cc-discord@cc-discord` で起動することもできるが、対話セッションでは起動のたびに確認ダイアログが出る (承諾の永続化は無い)。
 
 シェルの起動関数は、起動ごとに `CC_DISCORD_RUN_ID` (暗号学的乱数 128 ビットの 16 進 32 文字) を生成し、子プロセスの実行中だけ環境に置く。
 PowerShell では次の形にする。
@@ -67,7 +83,7 @@ function claude {
   [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
   $env:CC_DISCORD_RUN_ID = ($bytes | ForEach-Object { $_.ToString('x2') }) -join ''
   try {
-    & "~/.local/bin/claude.exe" --dangerously-skip-permissions --dangerously-load-development-channels plugin:cc-discord@cc-discord @args
+    & "~/.local/bin/claude.exe" --dangerously-skip-permissions --channels plugin:cc-discord@cc-discord @args
   } finally {
     if ($null -eq $prev) { Remove-Item Env:CC_DISCORD_RUN_ID -ErrorAction SilentlyContinue } else { $env:CC_DISCORD_RUN_ID = $prev }
   }
@@ -401,9 +417,9 @@ proxy はこの前提を覆す立場になく、破棄すると公式機能を�
 1. marketplace を登録し、`cc-discord` を user scope でインストールする。
 2. `discord@claude-plugins-official` を無効化する (以後、新しいセッションでは公式 server が起動しない)。
 3. キャッシュの `server.ts` を `server.ts.orig` で復元し、`bun plugin/src/official.ts --check` で実行ファイルの hash が対応表と一致することを確認する。
-4. シェルの起動関数を「起動と接続」の形に更新する。
+4. 「起動と接続」の managed settings を置き、シェルの起動関数を同じ節の形に更新する。
    稼働中のシェルは起動時に読んだ関数定義を保持し続けるため、手順 5 以降はシェルを開き直してから起動する。
-5. 旧セッションが動いていない担当で検証セッションを 1 つ起動し、確認ダイアログの承諾、channel の登録、inbound からスレッド、進捗、返信と footer までの流れ、ポインタと heartbeat と宛先ファイルの生成、watcher が 1 本であること、proxy と hook が同じ `CC_DISCORD_RUN_ID` を観測していることを確認する。
+5. 旧セッションが動いていない担当で検証セッションを 1 つ起動し、確認ダイアログが出ずに channel が登録されること、inbound からスレッド、進捗、返信と footer までの流れ、ポインタと heartbeat と宛先ファイルの生成、watcher が 1 本であること、proxy と hook が同じ `CC_DISCORD_RUN_ID` を観測していることを確認する。
    SessionStart hook は exec form (`command` と `args`) で登録しているため、ポインタが実際に書かれることをもって hook の起動も確認する。
    担当外のチャンネル id を指して `fetch_messages` や `reply` が拒否されること、担当チャンネルでは通ることも、この検証で確かめる。
 6. シェルを開き直してから全セッションを再起動する。
@@ -415,7 +431,8 @@ proxy はこの前提を覆す立場になく、破棄すると公式機能を�
 8. 次のリリースで shim 3 つと本体の書き込みを外し、残っている `progress-thread/<owner>` と `watch-<owner>.pid` を一度だけ掃除して、もう一度全セッションを再起動する。
 
 手順 5 で失敗した場合は、検証セッションを終了し、worktree で修正して手順 0 からやり直す。
-旧運用へ全面的に戻す場合は、起動関数を戻し、公式プラグインを再び有効化し、キャッシュに旧パッチを再適用し、作業ツリーを前の版に戻し、`cc-discord` を無効化する。
+旧運用へ全面的に戻す場合は、起動関数を戻し、managed settings を消し、公式プラグインを再び有効化し、キャッシュに旧パッチを再適用し、作業ツリーを前の版に戻し、`cc-discord` を無効化する。
+managed settings を残したままだと、既定の allowlist が置き換わったままになり公式の channel プラグインが登録されない。
 
 同じ担当で旧セッションと新セッションが並走すると、旧 server がロックを取った inbound には宛先ファイルが書かれず、新 watcher は投稿しない。
 一方で旧 watcher は、ロックを取ったセッションと同じ transcript を監視している保証が無いため、進捗の欠落や別セッションの進捗の混入が起こる。

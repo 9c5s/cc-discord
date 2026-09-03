@@ -479,16 +479,21 @@ function main(): void {
   })
 
   // 担当解決と archive の周期
+  // どちらも失敗はログだけにする
+  // 拾わないと unhandledRejection のハンドラが走り 中継ごと終了してしまう
   const resolveTimer = setInterval(() => {
-    void resolver.resolve().then(() => {
-      ensureFresh()
-      // 残置ロックの掃除は inbound の処理から外してここでまとめて行う
-      // 12 時間分のロックを毎回走査すると 通知 1 件あたりの処理が重くなるためである
-      if (owner) sweepInboundLocks(owner)
-    })
+    void resolver
+      .resolve()
+      .then(() => {
+        ensureFresh()
+        // 残置ロックの掃除は inbound の処理から外してここでまとめて行う
+        // 12 時間分のロックを毎回走査すると 通知 1 件あたりの処理が重くなるためである
+        if (owner) sweepInboundLocks(owner)
+      })
+      .catch((e) => log(`the resolve cycle failed: ${e}`))
   }, RESOLVE_MS)
   resolveTimer.unref?.()
-  const archiveTimer = setInterval(() => void archive(), ARCHIVE_MS)
+  const archiveTimer = setInterval(() => void archive().catch((e) => log(`the archive cycle failed: ${e}`)), ARCHIVE_MS)
   archiveTimer.unref?.()
 
   async function archive(): Promise<void> {
@@ -502,7 +507,7 @@ function main(): void {
   }
 
   // 最初の archive は担当解決の後に 1 回だけ行う (解決の開始は上で済ませてある)
-  void ready.then(archive)
+  void ready.then(archive).catch((e) => log(`the first archive failed: ${e}`))
 
   // 終了処理 ---
   let cleaned = false

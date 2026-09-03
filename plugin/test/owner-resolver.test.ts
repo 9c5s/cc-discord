@@ -153,6 +153,26 @@ test('createOwnerResolver は起動直後の確定では宛先を消さない', 
   expect(readProgressBody(OWNER)).toBe(THREAD)
 })
 
+test('createOwnerResolver は担当名が空なら REST を呼ばない', async () => {
+  // どのチャンネル名とも一致しないため 一覧を取っても結果は変わらず rate limit を削るだけになる
+  let calls = 0
+  const r = createOwnerResolver({
+    api: fakeApi({
+      getGuilds: async () => {
+        calls++
+        return { ok: true as const, value: [{ id: GUILD }] }
+      },
+    }),
+    access: () => ACCESS,
+    owner: '',
+    runId: RUN,
+    now: () => NOW,
+  })
+  await r.resolve()
+  expect(calls).toBe(0)
+  expect(r.channelId()).toBe(null)
+})
+
 // --- 無効化 ---
 
 test('createOwnerResolver は access.groups から外れた担当を REST を待たずに無効化する', async () => {

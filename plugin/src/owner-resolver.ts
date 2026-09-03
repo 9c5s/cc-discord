@@ -110,6 +110,9 @@ export function createOwnerResolver(deps: {
   }
 
   const resolve = async (): Promise<void> => {
+    // 担当名を持たないプロセスでは どのチャンネル名とも一致しないので REST を呼ばない
+    // 担当名は起動時に決まり 途中で変わらないため 毎周期の一覧取得は rate limit の枠を使うだけになる
+    if (!deps.owner) return
     if (running) return
     running = true
     try {

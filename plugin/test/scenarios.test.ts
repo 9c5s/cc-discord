@@ -192,9 +192,9 @@ test('run_id を持たない起動で再開すると旧 watcher は止まり新 
 // --- 別の起動との分離 ---
 
 test('前回起動のプロセスは新しい起動の宛先を消せない', () => {
-  // 新しい起動 (RUN_B) が書いた宛先を 前回起動 (RUN_A) の終了処理が消さない
+  // 後片付けは自分の heartbeat しか消さないため 他の起動が書いた宛先は残る
   writeTarget(OWNER, target({ run_id: RUN_B, activation_id: ACT_2 }))
-  cleanupRun({ claudePid: PID_A, runId: RUN_A, owner: OWNER })
+  cleanupRun({ claudePid: PID_A, runId: RUN_A })
   expect(readTarget(OWNER, ACT_2)).not.toBe(null)
 })
 

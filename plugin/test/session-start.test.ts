@@ -61,6 +61,14 @@ test('parseSessionStart は run_id が無くても入力を組み立てる', () 
   expect(parseSessionStart(stdin(), { CLAUDE_PID: String(PID) })?.runId).toBe(null)
 })
 
+test('parseSessionStart は形式の合わない run_id を持たないものとして扱う', () => {
+  // そのまま通すと watcher の引数検証で弾かれ 進捗の転送が理由の分からないまま止まる
+  const env = (v: string): NodeJS.ProcessEnv => ({ CLAUDE_PID: String(PID), CC_DISCORD_RUN_ID: v })
+  expect(parseSessionStart(stdin(), env('not-hex'))?.runId).toBe(null)
+  expect(parseSessionStart(stdin(), env('a'.repeat(31)))?.runId).toBe(null)
+  expect(parseSessionStart(stdin(), env('A'.repeat(32)))?.runId).toBe(null)
+})
+
 test('parseSessionStart は model が文字列のときだけ取り込む', () => {
   expect(parseSessionStart(stdin({ model: 'opus[1m]' }), { CLAUDE_PID: String(PID) })?.model).toBe('opus[1m]')
   expect(parseSessionStart(stdin({ model: { id: 'x' } }), { CLAUDE_PID: String(PID) })?.model).toBeUndefined()

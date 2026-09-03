@@ -135,7 +135,7 @@ export function createWatcher(deps: {
 }): Watcher {
   const now = deps.now ?? Date.now
   const log = deps.log ?? ((): void => {})
-  const waitStart = now()
+  let waitStart = now()
 
   let state: WatcherState = 'WAIT_HEARTBEAT'
   // 起動時点の EOF を読み取り位置にする (待機中の追記は ACTIVE 移行後に順番に処理される)
@@ -149,8 +149,10 @@ export function createWatcher(deps: {
     return beat !== null && isFresh(beat.written_at, HEARTBEAT_TTL_MS, now())
   }
 
-  const activationHolds = (): boolean =>
-    heartbeatHolds() && readPointer(deps.claudePid)?.activation_id === deps.activationId
+  const pointerHolds = (): boolean =>
+    readPointer(deps.claudePid)?.activation_id === deps.activationId
+
+  const activationHolds = (): boolean => heartbeatHolds() && pointerHolds()
 
   const terminate = (reason: string): void => {
     state = 'TERMINATED'
@@ -197,7 +199,17 @@ export function createWatcher(deps: {
         if (now() - waitStart > WAIT_HEARTBEAT_MAX_MS) terminate('heartbeat not observed')
         return
       }
-      if (!activationHolds()) terminate('activation is no longer current')
+      if (activationHolds()) return
+      // heartbeat が失効しただけなら待機へ戻す
+      // サスペンドからの復帰直後と MCP だけの再起動では proxy がまだ書き直していない
+      // どちらも tick より書き直しが遅れるだけなので ここで終了させると同じ activation では二度と再開しない
+      // ポインタが別の activation を指していたら 待たずに終了する
+      if (pointerHolds()) {
+        state = 'WAIT_HEARTBEAT'
+        waitStart = now()
+        return
+      }
+      terminate('activation is no longer current')
     },
 
     async poll(): Promise<void> {

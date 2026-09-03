@@ -145,17 +145,42 @@ test('createWatcher は起動前の内容を投稿しない', async () => {
   expect(v.sent).toEqual([])
 })
 
-test('createWatcher は heartbeat が失効したら終了する', () => {
+test('createWatcher は heartbeat が失効したら待機へ戻る', () => {
+  // サスペンドからの復帰直後と MCP だけの再起動では proxy の書き直しが tick より遅れる
   writeHeartbeat(PID, RUN, NOW)
   writePointer(pointer())
   const { w, advance } = watcher()
   w.tick()
   advance(15_001)
   w.tick()
+  expect(w.state()).toBe('WAIT_HEARTBEAT')
+})
+
+test('createWatcher は待機へ戻った後に heartbeat が書き直されたら監視を続ける', () => {
+  writeHeartbeat(PID, RUN, NOW)
+  writePointer(pointer())
+  const { w, advance } = watcher()
+  w.tick()
+  advance(15_001)
+  w.tick()
+  writeHeartbeat(PID, RUN, NOW + 15_001)
+  w.tick()
+  expect(w.state()).toBe('ACTIVE')
+})
+
+test('createWatcher は待機へ戻ってから 30 秒 heartbeat が来なければ終了する', () => {
+  writeHeartbeat(PID, RUN, NOW)
+  writePointer(pointer())
+  const { w, advance } = watcher()
+  w.tick()
+  advance(15_001)
+  w.tick()
+  advance(30_001)
+  w.tick()
   expect(w.state()).toBe('TERMINATED')
 })
 
-test('createWatcher は heartbeat の run_id が違えば終了する', () => {
+test('createWatcher は heartbeat の run_id が違えば監視を続けない', () => {
   writeHeartbeat(PID, RUN, NOW)
   writePointer(pointer())
   const { w } = watcher()
@@ -163,7 +188,7 @@ test('createWatcher は heartbeat の run_id が違えば終了する', () => {
   writeHeartbeat(PID, 'c'.repeat(32), NOW)
   rmSync(join(process.env.DISCORD_STATE_DIR as string, 'session', 'by-pid', `${PID}.${RUN}.heartbeat`), { force: true })
   w.tick()
-  expect(w.state()).toBe('TERMINATED')
+  expect(w.state()).toBe('WAIT_HEARTBEAT')
 })
 
 test('createWatcher はポインタの activation が変わったら終了する', () => {

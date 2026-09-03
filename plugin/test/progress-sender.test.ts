@@ -176,20 +176,23 @@ test('createProgressSender の切り詰めはサロゲートペアを分断し�
 
 // --- activation の確認 ---
 
-test('createProgressSender は heartbeat が無ければ終了を返す', async () => {
+test('createProgressSender は heartbeat が無ければ破棄する', async () => {
   writePointer(pointer())
   writeTarget(OWNER, target())
   const s = sender()
-  expect(await s.send('x')).toBe('terminated')
+  expect(await s.send('x')).toBe('dropped')
   expect(s.posted).toHaveLength(0)
 })
 
-test('createProgressSender は heartbeat が失効していれば終了を返す', async () => {
+test('createProgressSender は heartbeat が失効していれば破棄する', async () => {
+  // 失効は終了の合図にしない (書き直しが遅れているだけのことがある)
+  // watcher の終了は tick 側が待機を経て決める
   writePointer(pointer())
   writeHeartbeat(PID, RUN, NOW - 15_001)
   writeTarget(OWNER, target())
   const s = sender()
-  expect(await s.send('x')).toBe('terminated')
+  expect(await s.send('x')).toBe('dropped')
+  expect(s.posted).toHaveLength(0)
 })
 
 test('createProgressSender はポインタの activation が変わっていれば終了を返す', async () => {

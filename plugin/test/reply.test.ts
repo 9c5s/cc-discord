@@ -304,6 +304,17 @@ test('handleReply は 10 件を超える添付を拒否する', async () => {
   expect(d.sent).toHaveLength(0)
 })
 
+test('handleReply は 10 件を超える添付を読み込む前に拒否する', async () => {
+  // 却下するためだけに全部読むと 大きなファイルを並べられただけで proxy のメモリを使う
+  // 実在しないパスでも件数の理由で断ることをもって 読み込みに入っていないことを示す
+  const files = Array.from({ length: 11 }, (_, i) => join(testTmpDir, `absent-${i}.txt`))
+  const d = deps()
+  const res = await handleReply({ chat_id: CH, text: 'hi', files }, d.deps)
+  expect(res.isError).toBe(true)
+  expect(res.content[0].text).toContain('max 10 attachments')
+  expect(d.sent).toHaveLength(0)
+})
+
 test('handleReply は state dir 配下のファイルを拒否する', async () => {
   const f = join(process.env.DISCORD_STATE_DIR as string, '.env')
   writeFileSync(f, 'secret')

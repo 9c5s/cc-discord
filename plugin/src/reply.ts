@@ -94,8 +94,11 @@ const fail = (tool: string, message: string): ToolResult => ({
   isError: true,
 })
 
-// 添付を読み込む (公式と同じ順序で 送信禁止 サイズ 件数 を確認する)
+// 添付を読み込む (送信禁止とサイズは公式と同じ順序で確認する)
+// 件数だけは読み込みの前に弾く
+// 上限を超える指定で全部読んでからエラーにすると 却下するためだけに proxy のメモリを使う
 function loadFiles(paths: string[]): OutFile[] {
+  if (paths.length > MAX_ATTACHMENTS) throw new Error('Discord allows max 10 attachments per message')
   const out: OutFile[] = []
   for (const p of paths) {
     assertSendable(p)
@@ -105,7 +108,6 @@ function loadFiles(paths: string[]): OutFile[] {
     }
     out.push({ name: basename(p), data: readFileSync(p), type: 'application/octet-stream' })
   }
-  if (out.length > MAX_ATTACHMENTS) throw new Error('Discord allows max 10 attachments per message')
   return out
 }
 

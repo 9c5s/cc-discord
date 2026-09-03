@@ -18,7 +18,7 @@ import { isSnowflake } from './ids'
 import { botToken, ownerName } from './notify'
 import { inspectOfficial, officialPluginDir } from './official'
 import { createOwnerResolver } from './owner-resolver'
-import { deleteTarget, listTargets, writeProgressBody, writeTarget } from './progress-target'
+import { writeProgressBody, writeTarget } from './progress-target'
 import { createWriter, readJsonLines, type Json, type Writer } from './relay'
 import { handleEditMessage, handleReply } from './reply'
 import { stateDir } from './routes'
@@ -50,7 +50,9 @@ const POINTER_RETRY_MS = 500
 const CHILD_EXIT_WAIT_MS = 5_000
 
 // ログ
-// エラーと起動拒否は常時 詳細は DISCORD_NOTIFY_DEBUG のときだけ記録する
+// 起動と破棄と失敗をすべて記録する (debug の設定では絞らない)
+// 複数セッションが同じ通知を受ける構成では 破棄の記録が切り分けの手がかりになる
+// 出力は 1 通知あたり 1 行で 実測でも 2 日で 100 行に満たないため 常時書いても増え方は緩やかである
 export function createLogger(owner: string): (msg: string) => void {
   return (msg: string): void => {
     try {
@@ -310,18 +312,16 @@ export async function handleClientMessage(msg: Json, raw: string, ctx: ProxyCont
 }
 
 // 終了時の後片付け ---
-// 自分の run のものだけを消す (他の起動や他のセッションの状態には触れない)
-// 異常終了で残っても heartbeat は 15 秒 宛先は 12 時間で失効する
-// ポインタは正常終了でも消さない
-// MCP だけが再起動される経路 (/reload-plugins など) では SessionStart が発火せず 誰も作り直さないためである
-// 消すと以後の inbound が進捗の宛先を持てなくなる一方 残しても run_id の照合と heartbeat の失効で誤用は防げる
-export function cleanupRun(args: { claudePid: number; runId: string | null; owner: string }): void {
+// 消すのは自分の heartbeat だけである
+// これを止めれば watcher は待機へ移り 30 秒で終了するので 進捗が続くことはない
+//
+// ポインタと宛先は残す
+// MCP だけが再起動される経路 (/reload-plugins など) では SessionStart が発火せず 誰も作り直さない
+// 消すと走っている turn の進捗がその場で切れ 以後の inbound も宛先を持てなくなる
+// 残しても run_id の照合と heartbeat の失効で誤用は防げ 宛先は 12 時間 ポインタは 7 日の掃除で消える
+export function cleanupRun(args: { claudePid: number; runId: string | null }): void {
   if (!args.runId) return
   deleteHeartbeat(args.claudePid, args.runId)
-  if (!args.owner) return
-  for (const entry of listTargets(args.owner)) {
-    if (entry.target.run_id === args.runId) deleteTarget(args.owner, entry.activationId)
-  }
 }
 
 // 配線 ---
@@ -395,8 +395,10 @@ function main(): void {
     process.exit(1)
   })
   // 子が先に終了したら Claude Code に切断を検知させるため同じ終了コードで終わる
-  child.on('exit', (code, signal) => {
-    log(`child exit code=${code} signal=${signal}`)
+  // exit ではなく close を待つ
+  // exit は stdio が閉じる前に届くことがあり そこで打ち切ると子が最後に書いた応答を捨てる
+  child.on('close', (code, signal) => {
+    log(`child close code=${code} signal=${signal}`)
     cleanup()
     process.exit(code ?? (signal === null ? 0 : 1))
   })
@@ -481,7 +483,7 @@ function main(): void {
     if (heartbeatTimer) clearInterval(heartbeatTimer)
     clearInterval(resolveTimer)
     clearInterval(archiveTimer)
-    cleanupRun({ claudePid, runId, owner })
+    cleanupRun({ claudePid, runId })
   }
 
   let shuttingDown = false

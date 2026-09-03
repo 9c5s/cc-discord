@@ -402,10 +402,13 @@ proxy はこの前提を覆す立場になく、破棄すると公式機能を�
 2. `discord@claude-plugins-official` を無効化する (以後、新しいセッションでは公式 server が起動しない)。
 3. キャッシュの `server.ts` を `server.ts.orig` で復元し、`bun plugin/src/official.ts --check` で実行ファイルの hash が対応表と一致することを確認する。
 4. シェルの起動関数を「起動と接続」の形に更新する。
+   稼働中のシェルは起動時に読んだ関数定義を保持し続けるため、手順 5 以降はシェルを開き直してから起動する。
 5. 旧セッションが動いていない担当で検証セッションを 1 つ起動し、確認ダイアログの承諾、channel の登録、inbound からスレッド、進捗、返信と footer までの流れ、ポインタと heartbeat と宛先ファイルの生成、watcher が 1 本であること、proxy と hook が同じ `CC_DISCORD_RUN_ID` を観測していることを確認する。
    SessionStart hook は exec form (`command` と `args`) で登録しているため、ポインタが実際に書かれることをもって hook の起動も確認する。
    担当外のチャンネル id を指して `fetch_messages` や `reply` が拒否されること、担当チャンネルでは通ることも、この検証で確かめる。
-6. 全セッションを再起動する。
+6. シェルを開き直してから全セッションを再起動する。
+   古い関数のまま起動すると `--channels` が無効化済みの公式プラグインを指したままになり、cc-discord が channel として有効にならず inbound が届かない。
+   このとき proxy は inbound を受け取ってロックまで取るため、ログに破棄の記録が残らず、症状は Discord に反応しないことだけになる。
    旧セッションの終了時は、グローバルの `watch-stop.ts` shim が旧 watcher を止める。
    再起動後、`watch-<owner>.pid` のプロセスが残っていないことを確認する。
 7. グローバルの settings から hooks と statusLine の記述と symlink を削除する。

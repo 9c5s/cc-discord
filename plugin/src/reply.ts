@@ -102,9 +102,12 @@ function loadFiles(paths: string[]): OutFile[] {
   const out: OutFile[] = []
   for (const p of paths) {
     assertSendable(p)
-    const size = statSync(p).size
-    if (size > MAX_ATTACHMENT_BYTES) {
-      throw new Error(`file too large: ${p} (${(size / 1024 / 1024).toFixed(1)}MB, max 25MB)`)
+    const stat = statSync(p)
+    // FIFO やデバイスは size が 0 に見えるため サイズの検査を素通りして読み取りで止まる
+    // proxy は 1 プロセスなので そこで固まると channel も MCP も一緒に止まる
+    if (!stat.isFile()) throw new Error(`not a regular file: ${p}`)
+    if (stat.size > MAX_ATTACHMENT_BYTES) {
+      throw new Error(`file too large: ${p} (${(stat.size / 1024 / 1024).toFixed(1)}MB, max 25MB)`)
     }
     out.push({ name: basename(p), data: readFileSync(p), type: 'application/octet-stream' })
   }

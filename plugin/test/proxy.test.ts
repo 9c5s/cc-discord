@@ -418,35 +418,26 @@ test('absolutizeStateDir は絶対パスと未設定に触らない', () => {
   expect(none.DISCORD_STATE_DIR).toBeUndefined()
 })
 
-test('cleanupRun は自分の run の heartbeat と宛先を消す', () => {
+test('cleanupRun は自分の run の heartbeat を消す', () => {
   writeHeartbeat(PID, RUN, NOW)
-  writeTarget(OWNER, target(ACT, RUN))
-  cleanupRun({ claudePid: PID, runId: RUN, owner: OWNER })
+  cleanupRun({ claudePid: PID, runId: RUN })
   expect(readHeartbeat(PID, RUN)).toBe(null)
-  expect(readTarget(OWNER, ACT)).toBe(null)
 })
 
-test('cleanupRun はポインタを残す', () => {
-  // MCP だけが再起動されるときは SessionStart が発火せず 誰もポインタを作り直さない
-  // ここで消すと以後の inbound が進捗の宛先を持てなくなる
+test('cleanupRun はポインタと宛先を残す', () => {
+  // MCP だけが再起動されるときは SessionStart が発火せず 誰も作り直さない
+  // ここで消すと走っている turn の進捗が切れ 以後の inbound も宛先を持てなくなる
   writePointer(pointer())
-  cleanupRun({ claudePid: PID, runId: RUN, owner: OWNER })
+  writeTarget(OWNER, target(ACT, RUN))
+  cleanupRun({ claudePid: PID, runId: RUN })
   expect(readPointer(PID)?.run_id).toBe(RUN)
-})
-
-test('cleanupRun は他の run の宛先を消さない', () => {
-  const otherAct = 'e'.repeat(32)
-  writeTarget(OWNER, target(otherAct, OTHER_RUN))
-  cleanupRun({ claudePid: PID, runId: RUN, owner: OWNER })
-  expect(readTarget(OWNER, otherAct)).not.toBe(null)
+  expect(readTarget(OWNER, ACT)).not.toBe(null)
 })
 
 test('cleanupRun は run_id を持たない起動では何もしない', () => {
-  writePointer(pointer({ run_id: null }))
-  writeTarget(OWNER, target(ACT, RUN))
-  cleanupRun({ claudePid: PID, runId: null, owner: OWNER })
-  expect(readPointer(PID)).not.toBe(null)
-  expect(readTarget(OWNER, ACT)).not.toBe(null)
+  writeHeartbeat(PID, RUN, NOW)
+  cleanupRun({ claudePid: PID, runId: null })
+  expect(readHeartbeat(PID, RUN)).not.toBe(null)
 })
 
 // --- 担当外の tools/call の遮断 ---

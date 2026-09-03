@@ -176,28 +176,41 @@ test('createOwnerResolver は担当名が空なら REST を呼ばない', async 
 // --- 無効化 ---
 
 test('createOwnerResolver は access.groups から外れた担当を REST を待たずに無効化する', async () => {
-  const { r } = resolver()
-  await r.resolve()
-  writeTarget(OWNER, target())
-
-  let restCalled = false
-  const dropped = createOwnerResolver({
+  // 同じ resolver で access を変える (別インスタンスでは担当を持った状態の分岐を通らない)
+  let groups: Access['groups'] = { [CH]: {} }
+  let calls = 0
+  let release = (): void => {}
+  const gate = new Promise<void>((res) => {
+    release = res
+  })
+  const r = createOwnerResolver({
     api: fakeApi({
       getGuilds: async () => {
-        restCalled = true
+        calls++
+        // 2 周期目は REST を止めたままにして 判定だけが先に進むことを確かめる
+        if (calls > 1) await gate
         return { ok: true as const, value: [{ id: GUILD }] }
       },
     }),
-    access: () => ({ allowFrom: [], groups: {} }),
+    access: () => ({ allowFrom: [], groups }) as Access,
     owner: OWNER,
     runId: RUN,
     now: () => NOW,
   })
-  // 直前の担当を持たせるため 1 度解決してから access を空にする
-  await dropped.resolve()
-  expect(dropped.channelId()).toBe(null)
+
+  await r.resolve()
+  expect(r.channelId()).toBe(CH)
+  writeTarget(OWNER, target())
+
+  groups = {}
+  const pending = r.resolve()
+  expect(r.channelId()).toBe(null)
   expect(readRoute(OWNER)).toBe(null)
-  expect(restCalled).toBe(true)
+  expect(readTarget(OWNER, ACT)).toBe(null)
+
+  release()
+  await pending
+  expect(calls).toBe(2)
 })
 
 test('createOwnerResolver は担当が未解決なら route を消す', async () => {

@@ -161,6 +161,13 @@ test('listTargets は他の担当の宛先を含めない', () => {
   expect(listTargets(OWNER).map((e) => e.activationId)).toEqual([ACT])
 })
 
+test('listTargets は担当名を区切りまで照合する', () => {
+  // 前方一致だけで拾うと proj の掃除が proj-web の宛先を巻き込む
+  writeTarget(OWNER, target())
+  writeTarget(`${OWNER}-web`, target({ activation_id: OTHER_ACT }))
+  expect(listTargets(OWNER).map((e) => e.activationId)).toEqual([ACT])
+})
+
 test('listTargets は読めない宛先を除く', () => {
   mkdirSync(progressDir(), { recursive: true })
   writeFileSync(join(progressDir(), `${OWNER}.${ACT}.meta`), 'broken')

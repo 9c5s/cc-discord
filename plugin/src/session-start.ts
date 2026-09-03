@@ -10,7 +10,7 @@ import {
   type ActivationSource,
   type Pointer,
 } from './activation'
-import { isPid, isSessionId } from './ids'
+import { isHex32, isPid, isSessionId } from './ids'
 import { debugLog } from './notify'
 
 // SessionStart hook ---
@@ -45,9 +45,12 @@ export function parseSessionStart(raw: string, env: NodeJS.ProcessEnv): StartInp
   if (typeof v.transcript_path !== 'string' || !v.transcript_path) return null
   if (!SOURCES.includes(v.source as ActivationSource)) return null
 
+  // 形式の合わない run_id は持たないものとして扱う
+  // そのまま通すと watcher の引数検証で弾かれ 進捗の転送が理由の分からないまま止まる
+  const runId = env.CC_DISCORD_RUN_ID
   const input: StartInput = {
     claudePid: Number(pid),
-    runId: env.CC_DISCORD_RUN_ID ?? null,
+    runId: isHex32(runId) ? runId : null,
     sessionId: v.session_id,
     transcriptPath: v.transcript_path,
     source: v.source as ActivationSource,

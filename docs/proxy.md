@@ -287,7 +287,13 @@ watcher は次のように自律終了する。
 
 - 起動直後は最初の有効な heartbeat を最大 30 秒待つ (この間は投稿しない)
 - 確認後は毎秒と各投稿の直前に、heartbeat とポインタを確認する
-- 条件が満たされなくなったら送信キューを破棄して終了する
+- ポインタが別の activation を指していたら、送信キューを破棄して終了する
+- heartbeat が失効しただけなら待機へ戻り、そこから 30 秒待って戻らなければ終了する
+
+heartbeat の失効で即座に終了しないのは、書き直しが判定より遅れる経路があるためである。
+watcher の判定は毎秒、proxy の書き込みは 5 秒ごとなので、サスペンドからの復帰直後は watcher の判定が先に動く。
+MCP だけが再起動される経路 (`/reload-plugins` など) でも、新しい proxy が書き直すまでの数秒は失効して見える。
+終了した watcher は同じ activation では再起動しないため、どちらの場合も次の SessionStart まで進捗が止まる。
 
 これにより、Claude Code の終了やクラッシュ (heartbeat が止まる)、PID の再利用 (heartbeat の run_id が違う)、`/clear` や `/resume` による activation の切り替え (ポインタが変わる) のいずれでも、古い watcher は残らない。
 停止のための hook も pid ファイルも持たない。
@@ -308,6 +314,8 @@ watcher は次のように自律終了する。
 ## ファイル契約 (state dir)
 
 state dir の既定は `~/.claude/channels/discord` で、`DISCORD_STATE_DIR` があればそれを使う。
+相対パスが渡された場合は、子を起動する前に絶対パスへ直す。
+子は `--cwd` で公式プラグインのディレクトリへ移ってから動くため、相対のままだと proxy と子が別の場所を state dir とみなす。
 新しく書くファイルは、PID 付きの一時ファイルへ書いてから rename する。
 ファイル名に埋める識別子は、形式を検証し、解決後のパスが対象ディレクトリの直下であることを確認してから読み書きする。
 
@@ -323,6 +331,13 @@ state dir の既定は `~/.claude/channels/discord` で、`DISCORD_STATE_DIR` �
 | `model-usage.json` | 使用量 API のキャッシュ |
 
 宛先ファイルは activation 単位なので、同じ session_id を別のプロセスから同時に resume しても互いを上書きしない。
+
+proxy の終了処理では heartbeat と自分の run の宛先を消すが、ポインタは残す。
+MCP だけが再起動される経路では SessionStart が発火せず、誰もポインタを作り直さないためである。
+消すと、以後の inbound はすべて進捗の宛先を持てないまま処理される。
+残したポインタは次の SessionStart で置き換わり、それも無ければ 7 日後の掃除で消える。
+その間に古いポインタが誤って使われることはない。
+`run_id` が一致しなければ現行 activation として採用せず、heartbeat が無ければ watcher も投稿しないためである。
 
 宛先の有効期間の終端は 5 つである。
 
@@ -419,7 +434,7 @@ compaction は同じプロセスの中で起きるため、起動ディレクト
 - 5 時間枠と 7 日枠の値はキャッシュ経由で、通常は 60 秒以内、更新に失敗し続けた場合は最大 15 分の遅れがある。
 - 上流の更新 (自動更新を含む) の直後は、対応表を更新するまで新しいセッションが Discord 無しになる。
 - inbound の後にそのセッションで行ったローカルの作業は、次の inbound、activation の切り替え、proxy の終了、12 時間のいずれかまで、同じスレッドへ転送される (意図した挙動)。
-- watcher は heartbeat の失効で終了するため、Claude Code の終了やクラッシュの後、最長 15 秒は生存する。
+- watcher は heartbeat の失効を確かめてから待機へ戻り、そこから 30 秒で終了するため、Claude Code の終了やクラッシュの後、最長 45 秒は生存する。
   その間に transcript は書かれないため投稿は起きない。
 - watcher がクラッシュや一時的な読み取り失敗で終了した場合、同じ activation では再起動しない (次の SessionStart まで進捗の転送が無い)。
 - `CC_DISCORD_RUN_ID` を設定せずに起動したプロセス、hook に `CLAUDE_PID` が渡らない環境、MCP サーバーが Claude Code の直接の子として起動されない環境では、進捗の転送が無効になる。

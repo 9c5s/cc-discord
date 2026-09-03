@@ -414,3 +414,21 @@ test('429 の待ち時間が上限を超えるなら待たずに諦める', asyn
   expect(s.waits).toEqual([])
   expect(calls).toBe(1)
 })
+
+test('最後の試行が 429 なら待たずに諦める', async () => {
+  // 送り直さない待ちは 直列に待つ watcher の後続の進捗を止めるだけである
+  setupActive()
+  let calls = 0
+  const s = sender({
+    api: {
+      createMessage: async () => {
+        calls++
+        return { ok: false as const, error: 'rate limited', retryAfterMs: 1_500 }
+      },
+    },
+  })
+  expect(await s.send('x')).toBe('dropped')
+  expect(calls).toBe(2)
+  // 1 回目の 429 の分だけ待つ
+  expect(s.waits).toEqual([1_500])
+})

@@ -256,7 +256,7 @@ test('担当 A のセッションは登録済みでも担当 B のチャンネ�
     {
       api: f.api,
       access: () => ACCESS_BOTH,
-      footer: () => '',
+      footer: async () => '',
       stopTyping: () => {},
       ownerCtx: { kind: 'named', owner: OWNER, dir: 'C:\example\proj' },
       ownerChannelId: () => CH,
@@ -273,7 +273,7 @@ test('担当 A のセッションは自分の担当チャンネルへは返信�
     {
       api: f.api,
       access: () => ACCESS_BOTH,
-      footer: () => '',
+      footer: async () => '',
       stopTyping: () => {},
       ownerCtx: { kind: 'named', owner: OWNER, dir: 'C:\example\proj' },
       ownerChannelId: () => CH,

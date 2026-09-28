@@ -2,10 +2,10 @@ import { closeSync, fstatSync, openSync, readFileSync, readSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { buildStatusBlock, modelUsageSuffix, readBranch } from './status'
-import { readCachedUsage, type UsageSnapshot } from './usage'
+import type { UsageSnapshot } from './usage'
 
 // reply 末尾の footer 組み立て ---
-// statusline の stdin JSON に依存せず 現行 activation の transcript と使用量キャッシュから組み立てる
+// statusline の stdin JSON に依存せず 現行 activation の transcript と使用量 API の値から組み立てる
 // transcript が取れない場合はモデル行と ctx を省き ブランチと使用量だけで作る
 
 // transcript は末尾だけ読む (長い会話でも一定コストにする)
@@ -122,11 +122,10 @@ export function contextWindow(modelId: string, ownerDir: string | null): number 
 export function buildFooter(input: {
   transcriptPath: string | null
   ownerDir: string | null
-  usage?: UsageSnapshot
+  usage: UsageSnapshot
   env?: NodeJS.ProcessEnv
 }): string {
   const env = input.env ?? process.env
-  const usage = input.usage ?? readCachedUsage()
   const entry = input.transcriptPath ? readLastAssistantEntry(input.transcriptPath) : null
 
   const data: J = {}
@@ -139,9 +138,9 @@ export function buildFooter(input: {
     data.context_window = { used_percentage: Math.floor((entry.tokens / window) * 100) }
   }
   const rateLimits: J = {}
-  if (usage.session) rateLimits.five_hour = usage.session
-  if (usage.weekly) rateLimits.seven_day = usage.weekly
+  if (input.usage.session) rateLimits.five_hour = input.usage.session
+  if (input.usage.weekly) rateLimits.seven_day = input.usage.weekly
   if (Object.keys(rateLimits).length > 0) data.rate_limits = rateLimits
 
-  return buildStatusBlock(data, input.ownerDir ? readBranch(input.ownerDir) : null, modelUsageSuffix(usage.modelScoped))
+  return buildStatusBlock(data, input.ownerDir ? readBranch(input.ownerDir) : null, modelUsageSuffix(input.usage.modelScoped))
 }

@@ -82,7 +82,7 @@ export type ToolResult = { content: Array<{ type: 'text'; text: string }>; isErr
 export type ReplyDeps = {
   api: DiscordClient
   access: () => Access
-  footer: () => string
+  footer: () => Promise<string>
   stopTyping: (chatId: string) => void
   ownerCtx: OwnerContext
   ownerChannelId: () => string | null
@@ -158,7 +158,7 @@ export async function handleReply(args: Record<string, unknown>, deps: ReplyDeps
 
     const access = deps.access()
     const limit = resolveChunkLimit(access)
-    const chunks = attachFooter(chunk(text, limit, access.chunkMode ?? 'length'), deps.footer(), limit)
+    const chunks = attachFooter(chunk(text, limit, access.chunkMode ?? 'length'), await deps.footer(), limit)
     const replyMode = access.replyToMode ?? 'first'
 
     const sentIds: string[] = []

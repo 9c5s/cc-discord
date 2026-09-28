@@ -173,7 +173,7 @@ function harness(over: Record<string, unknown> = {}): Harness {
     runId: (over.runId as string | null | undefined) === undefined ? RUN : (over.runId as string | null),
     toClient: writer(toClient),
     toChild: writer(toChild),
-    footer: () => (over.footer as string) ?? '',
+    footer: async () => (over.footer as string) ?? '',
     log: (m: string) => void logs.push(m),
     now: (over.now as (() => number) | undefined) ?? (() => NOW),
     sleep: async () => {},

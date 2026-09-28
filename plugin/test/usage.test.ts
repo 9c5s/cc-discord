@@ -1,14 +1,13 @@
 import { test, expect } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import {
   credentialsPath,
-  ensureFresh,
+  currentUsage,
   fetchUsageSnapshot,
   readAccessToken,
   readCachedUsage,
-  refreshModelUsage,
   type ModelUsageEntry,
 } from '../src/usage'
 
@@ -18,8 +17,6 @@ const tmpFile = (name: string): string => join(mkdtempSync(join(tmpdir(), 'usage
 const writeJson = (path: string, value: unknown): void => {
   writeFileSync(path, JSON.stringify(value))
 }
-const readJson = (path: string): Record<string, unknown> =>
-  JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
 
 const nowSec = (): number => Date.now() / 1000
 
@@ -310,118 +307,77 @@ test('readCachedUsage は STALE_SEC を超えて古いキャッシュをすべ�
   expect(readCachedUsage(p)).toEqual({ weekly: null, session: null, modelScoped: [] })
 })
 
-// --- refreshModelUsage ---
+// --- currentUsage ---
 
-test('refreshModelUsage は週次値とモデル別枠と時刻を書き込む', async () => {
+const SNAPSHOT = {
+  weekly: WEEKLY_STORED,
+  session: SESSION_STORED,
+  modelScoped: [FABLE_ENTRY],
+}
+const EMPTY = { weekly: null, session: null, modelScoped: [] }
+
+test('currentUsage は取得した値を返しキャッシュへ書く', async () => {
   const p = tmpFile('cache.json')
-  const entries: ModelUsageEntry[] = [{ display_name: 'Fable', percent: 88, resets_at: null }]
-  const weekly = { used_percentage: 51, resets_at: 1787454000 }
-  await refreshModelUsage(p, async () => ({ weekly, session: null, modelScoped: entries }))
-  const c = readJson(p)
-  expect(c.data).toEqual(entries)
-  expect(c.weekly).toEqual(weekly)
-  expect(typeof c._cached_at).toBe('number')
-  expect(typeof c._attempted_at).toBe('number')
+  expect(await currentUsage(p, async () => SNAPSHOT)).toEqual(SNAPSHOT)
+  expect(readCachedUsage(p)).toEqual(SNAPSHOT)
 })
 
-test('refreshModelUsage は失敗時に既存データを保持し試行時刻だけ更新する', async () => {
+test('currentUsage は取得に失敗したらキャッシュの値を返す', async () => {
   const p = tmpFile('cache.json')
-  const kept = [{ display_name: 'Fable', percent: 88, resets_at: null }]
-  const weekly = { used_percentage: 51, resets_at: 1787454000 }
-  writeJson(p, { _cached_at: 100, _attempted_at: 100, data: kept, weekly })
-  await refreshModelUsage(p, async () => null)
-  const c = readJson(p)
-  expect(c.data).toEqual(kept)
-  expect(c.weekly).toEqual(weekly)
-  expect(c._cached_at).toBe(100)
-  expect(c._attempted_at as number).toBeGreaterThan(100)
+  writeJson(p, { _cached_at: nowSec(), data: [FABLE_ENTRY], weekly: WEEKLY_STORED, session: SESSION_STORED })
+  expect(await currentUsage(p, async () => null)).toEqual(SNAPSHOT)
 })
 
-// --- ensureFresh ---
-
-test('ensureFresh は TTL 内なら更新を起動しない', () => {
+test('currentUsage は取得に失敗しキャッシュが古ければ空の組を返す', async () => {
   const p = tmpFile('cache.json')
-  const now = nowSec()
-  writeJson(p, { _cached_at: now, _attempted_at: now, data: [] })
-  let spawned = false
-  ensureFresh(p, () => {
-    spawned = true
-  })
-  expect(spawned).toBe(false)
+  writeJson(p, { _cached_at: nowSec() - 901, data: [FABLE_ENTRY], weekly: WEEKLY_STORED, session: SESSION_STORED })
+  expect(await currentUsage(p, async () => null)).toEqual(EMPTY)
 })
 
-test('ensureFresh は TTL 切れなら更新を起動する', () => {
-  const p = tmpFile('cache.json')
-  writeJson(p, { _cached_at: 0, _attempted_at: 0, data: [] })
-  let spawned = false
-  ensureFresh(p, () => {
-    spawned = true
-  })
-  expect(spawned).toBe(true)
-})
-
-test('ensureFresh は 60 秒より古いキャッシュで更新を起動する', () => {
-  const p = tmpFile('cache.json')
-  writeJson(p, { _cached_at: nowSec() - 61, _attempted_at: 0, data: [] })
-  let spawned = false
-  ensureFresh(p, () => {
-    spawned = true
-  })
-  expect(spawned).toBe(true)
-})
-
-test('ensureFresh は保持時間の内のキャッシュでは起動しない', () => {
-  // 境界の 1 秒手前に置くと 実行が 1 秒ずれただけで結果が変わる
-  const p = tmpFile('cache.json')
-  writeJson(p, { _cached_at: nowSec() - 1, _attempted_at: 0, data: [] })
-  let spawned = false
-  ensureFresh(p, () => {
-    spawned = true
-  })
-  expect(spawned).toBe(false)
-})
-
-test('ensureFresh は直近に試行済みなら起動しない', () => {
-  const p = tmpFile('cache.json')
-  writeJson(p, { _cached_at: 0, _attempted_at: nowSec(), data: [] })
-  let spawned = false
-  ensureFresh(p, () => {
-    spawned = true
-  })
-  expect(spawned).toBe(false)
-})
-
-test('ensureFresh はキャッシュが無ければ起動する', () => {
-  let spawned = false
-  ensureFresh(tmpFile('absent.json'), () => {
-    spawned = true
-  })
-  expect(spawned).toBe(true)
-})
-
-test('ensureFresh は起動前に試行時刻を記録し RETRY_SEC の間は再依頼しない', () => {
-  const p = tmpFile('cache.json')
-  writeJson(p, { _cached_at: 0, _attempted_at: 0, data: [] })
-  ensureFresh(p, () => {})
-  expect(readJson(p)._attempted_at as number).toBeGreaterThan(0)
-
-  // 記録済みなので続けて呼んでも起動しない
-  let spawned = false
-  ensureFresh(p, () => {
-    spawned = true
-  })
-  expect(spawned).toBe(false)
-})
-
-test('ensureFresh は試行時刻を書き込めなくても例外を投げない', () => {
+test('currentUsage はキャッシュを書けなくても取得した値を返す', async () => {
   // キャッシュのパスがディレクトリだと writeAtomic の rename が失敗する
   const p = tmpFile('cache.json')
   mkdirSync(p)
-  let spawned = false
-  expect(() =>
-    ensureFresh(p, () => {
-      spawned = true
-    }),
-  ).not.toThrow()
-  expect(spawned).toBe(false)
+  expect(await currentUsage(p, async () => SNAPSHOT)).toEqual(SNAPSHOT)
+})
+
+// 呼ばれたかを記録する取得関数
+function fetchSpy(result: typeof SNAPSHOT | null) {
+  const spy = { called: 0, fn: async () => {
+    spy.called++
+    return result
+  } }
+  return spy
+}
+
+test('currentUsage は直近 60 秒以内に試行済みなら取得せずキャッシュを返す', async () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { _attempted_at: nowSec() - 1, _cached_at: nowSec() - 1, data: [FABLE_ENTRY], weekly: WEEKLY_STORED, session: SESSION_STORED })
+  const spy = fetchSpy(SNAPSHOT)
+  expect(await currentUsage(p, spy.fn)).toEqual(SNAPSHOT)
+  expect(spy.called).toBe(0)
+})
+
+test('currentUsage は 60 秒より前の試行なら取得する', async () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { _attempted_at: nowSec() - 61 })
+  const spy = fetchSpy(SNAPSHOT)
+  expect(await currentUsage(p, spy.fn)).toEqual(SNAPSHOT)
+  expect(spy.called).toBe(1)
+})
+
+test('currentUsage は取得に失敗しても試行時刻を記録し 60 秒の間は再び取得しない', async () => {
+  const p = tmpFile('cache.json')
+  const spy = fetchSpy(null)
+  await currentUsage(p, spy.fn)
+  await currentUsage(p, spy.fn)
+  expect(spy.called).toBe(1)
+})
+
+test('currentUsage は未来の試行時刻を無視して取得する', async () => {
+  const p = tmpFile('cache.json')
+  writeJson(p, { _attempted_at: nowSec() + 3600 })
+  const spy = fetchSpy(SNAPSHOT)
+  await currentUsage(p, spy.fn)
+  expect(spy.called).toBe(1)
 })

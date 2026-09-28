@@ -172,7 +172,7 @@ function deps(over: Record<string, unknown> = {}) {
     deps: {
       api: f.api,
       access: () => (over.access as Access) ?? ACCESS,
-      footer: () => (over.footer as string) ?? '',
+      footer: async () => (over.footer as string) ?? '',
       stopTyping: (id: string) => void stopped.push(id),
       ownerCtx: (over.ownerCtx as OwnerContext) ?? OWNER_CTX,
       ownerChannelId: () => (over.ownerChannelId === undefined ? CH : (over.ownerChannelId as string | null)),

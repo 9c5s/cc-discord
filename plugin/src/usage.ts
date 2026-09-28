@@ -1,13 +1,12 @@
-import { spawn } from 'child_process'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
 import { stateDir } from './routes'
 
-// モデル別週次枠 (Fable 等) の取得とキャッシュを担うモジュール
+// 5h と 7d とモデル別週次枠 (Fable 等) の取得とキャッシュを担うモジュール
 // statusline の stdin JSON にはモデル別の枠が含まれないため使用量 API から直接取る
 // キャッシュは cc-discord 専用で statusline 側とは一切共有しない (相互に依存させない)
-// 表示側 (status.ts) は読むだけで HTTP を発行せず 更新は常に別プロセスへ逃がす
+// キャッシュは直近に試行済みのときと取得に失敗したときの代わりに使う
 
 type J = Record<string, unknown>
 const obj = (v: unknown): J | null => (typeof v === 'object' && v !== null ? (v as J) : null)
@@ -34,12 +33,11 @@ export type UsageSnapshot = {
 }
 
 const API_URL = 'https://api.anthropic.com/api/oauth/usage'
-const API_TIMEOUT_MS = 5_000
-// キャッシュの保持時間
-// reply の footer は inbound と reply のたびに ensureFresh を呼ぶ経路になったため
-// statusline 経由で毎描画更新していた頃より短くして鮮度を保つ
-const TTL_SEC = 60
-const RETRY_SEC = 60 // 取得失敗時に再試行を抑制する間隔
+// reply の送信を待たせる上限
+const API_TIMEOUT_MS = 3_000
+// 試行の間隔の下限 (全セッションでキャッシュを介して共有する)
+// 使用量 API は Claude Code 本体や statusline と上限を共有しており 短い間隔で呼ぶと 429 を返す
+const MIN_ATTEMPT_INTERVAL_SEC = 60
 const STALE_SEC = 900 // この時間を超えて更新できていないキャッシュは表示に使わない
 
 export const usageCachePath = (): string => join(stateDir(), 'model-usage.json')
@@ -167,9 +165,9 @@ function toStoredBucket(value: unknown): RateBucket | null {
   return { used_percentage: percent, resets_at: resets }
 }
 
-// キャッシュを1回だけ読んで 7d 全体とモデル別枠をまとめて取り出す
-// 表示側が使う経路で HTTP は発行しない
-// 1回の描画で両方をこの結果から導出することで 描画途中の更新による時点のずれを避ける
+// キャッシュを 1 回だけ読んで 7d 全体とモデル別枠をまとめて取り出す
+// 取得しないときの代わりに使う経路で HTTP は発行しない
+// 1 回の描画で両方をこの結果から導出することで 描画途中の更新による時点のずれを避ける
 // 古すぎるキャッシュは両方とも捨てる (片方だけ古い値を混ぜないため)
 export function readCachedUsage(path = usageCachePath()): UsageSnapshot {
   const cache = readCache(path)
@@ -191,67 +189,40 @@ function toStoredEntry(item: unknown): ModelUsageEntry | null {
   return { display_name: name, percent, resets_at: num(o.resets_at) }
 }
 
-// API を取得してキャッシュを更新する (別プロセスから呼ばれる想定)
-// 失敗時も試行時刻だけ記録し既存データは保持する
-// 同時に走った更新どうしは互いを上書きしうるが どちらも同時点のスナップショットなので害はない
-export async function refreshModelUsage(
-  path = usageCachePath(),
-  fetchFn = fetchUsageSnapshot,
-): Promise<void> {
-  const snapshot = await fetchFn()
-  const now = nowSec()
-  const cache = readCache(path)
-  cache._attempted_at = now
-  if (snapshot !== null) {
-    cache._cached_at = now
-    cache.data = snapshot.modelScoped
-    cache.weekly = snapshot.weekly
-    cache.session = snapshot.session
-  }
-  writeAtomic(path, JSON.stringify(cache))
-}
-
-// 更新用の子プロセスをデタッチして起動する
-function spawnRefresh(): void {
+// キャッシュを書く (書けなくても今回の表示には影響しないため失敗は無視する)
+function writeCacheQuietly(path: string, cache: J): void {
   try {
-    // windowsHide は Windows で更新のたびにコンソール窓が現れるのを抑止する
-    const child = spawn(process.execPath, [import.meta.path], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    })
-    child.unref()
-  } catch {
-    // 起動できなくても表示は継続する
-  }
-}
-
-// 更新が不要なキャッシュかを判定する
-// 保持時間内のデータがある もしくは直近に取得を試みたばかりの場合は再取得しない
-function isCacheCurrent(cache: J): boolean {
-  const now = nowSec()
-  if (Array.isArray(cache.data) && now - (num(cache._cached_at) ?? 0) < TTL_SEC) return true
-  return now - (num(cache._attempted_at) ?? 0) < RETRY_SEC
-}
-
-// キャッシュが古ければ更新を別プロセスへ依頼する
-// 結果は待たず次回の描画へ反映する (statusline の表示を遅延させないため)
-// 起動前に試行時刻を記録し 後続の描画が RETRY_SEC の間は再依頼しないようにする
-// 同時刻に走った tee プロセスどうしは重複して依頼しうるが 余分な取得が1回増えるだけで実害は無い
-// キャッシュを書けない場合も例外は外へ出さない (補助的な更新で呼び出し元の描画を止めないため)
-export function ensureFresh(path = usageCachePath(), spawnFn = spawnRefresh): void {
-  try {
-    const cache = readCache(path)
-    if (isCacheCurrent(cache)) return
-    cache._attempted_at = nowSec()
     writeAtomic(path, JSON.stringify(cache))
-    spawnFn()
   } catch {
-    // 更新を依頼できなくても次回の描画で再試行される
+    // 次回は試行時刻の記録が無いものとして扱われる
   }
 }
 
-// 直接実行されたときはキャッシュ更新のみ行う (spawnRefresh の実体)
-if (import.meta.main) {
-  await refreshModelUsage()
+// 直近に試行済みかを判定する (未来の時刻は不正な値とみなして無視する)
+function attemptedRecently(cache: J): boolean {
+  const elapsed = nowSec() - (num(cache._attempted_at) ?? 0)
+  return elapsed >= 0 && elapsed < MIN_ATTEMPT_INTERVAL_SEC
+}
+
+// 使用量 API から現時点の値を取得してキャッシュへ書く
+// 直近に試行済みのときと取得に失敗したときはキャッシュの値を返す
+export async function currentUsage(
+  path = usageCachePath(),
+  fetchFn: () => Promise<UsageSnapshot | null> = () => fetchUsageSnapshot(),
+): Promise<UsageSnapshot> {
+  const cache = readCache(path)
+  if (attemptedRecently(cache)) return readCachedUsage(path)
+  // 並走するセッションが同時に取得しないよう 取得の前に試行時刻を記録する
+  const attemptedAt = nowSec()
+  writeCacheQuietly(path, { ...cache, _attempted_at: attemptedAt })
+  const snapshot = await fetchFn()
+  if (snapshot === null) return readCachedUsage(path)
+  writeCacheQuietly(path, {
+    _attempted_at: attemptedAt,
+    _cached_at: nowSec(),
+    data: snapshot.modelScoped,
+    weekly: snapshot.weekly,
+    session: snapshot.session,
+  })
+  return snapshot
 }

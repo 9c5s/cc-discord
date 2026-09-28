@@ -31,7 +31,7 @@ import {
   type OwnerContext,
 } from './routing'
 import { archiveStaleThreads } from './stale-threads'
-import { ensureFresh } from './usage'
+import { currentUsage } from './usage'
 
 // cc-discord 透過プロキシ ---
 // Claude Code と公式 discord channel server の間に入り stdio の JSON-RPC を中継する
@@ -112,7 +112,7 @@ export type ProxyContext = {
   runId: string | null
   toClient: Writer
   toChild: Writer
-  footer: () => string
+  footer: () => Promise<string>
   log: (msg: string) => void
   now?: () => number
   sleep?: (ms: number) => Promise<void>
@@ -455,12 +455,12 @@ function main(): void {
     runId,
     toClient,
     toChild,
-    footer: () => {
+    footer: async () => {
       const pointer = runId ? currentActivation(claudePid, runId) : null
-      ensureFresh()
       return buildFooter({
         transcriptPath: pointer?.transcript_path ?? null,
         ownerDir: ownerCtx.kind === 'none' ? null : ownerCtx.dir,
+        usage: await currentUsage(),
       })
     },
     log,
@@ -486,7 +486,6 @@ function main(): void {
     void resolver
       .resolve()
       .then(() => {
-        ensureFresh()
         // 残置ロックの掃除は inbound の処理から外してここでまとめて行う
         // 12 時間分のロックを毎回走査すると 通知 1 件あたりの処理が重くなるためである
         if (owner) sweepInboundLocks(owner)

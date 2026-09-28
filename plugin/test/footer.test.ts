@@ -144,41 +144,54 @@ function writeSettings(dir: string, name: string, model: unknown): void {
   writeFileSync(join(dir, name), JSON.stringify(model === undefined ? {} : { model }))
 }
 
-test('contextWindow は model に [1m] があれば 1M を返す', () => {
-  const ownerDir = join(testTmpDir, 'proj')
-  writeSettings(join(ownerDir, '.claude'), 'settings.json', 'opus[1m]')
-  expect(contextWindow(ownerDir)).toBe(1_000_000)
-})
+// 1M を標準で持たない世代の代表
+const LEGACY_MODEL = 'claude-opus-4-6'
 
-test('contextWindow は model に [1m] が無ければ 200K を返す', () => {
+test('contextWindow は 1M を標準で持つモデルなら settings の [1m] が無くても 1M を返す', () => {
   const ownerDir = join(testTmpDir, 'proj')
   writeSettings(join(ownerDir, '.claude'), 'settings.json', 'opus')
-  expect(contextWindow(ownerDir)).toBe(200_000)
+  for (const id of ['claude-opus-5-5', 'claude-opus-4-7', 'claude-sonnet-5', 'claude-fable-5-1']) {
+    expect(contextWindow(id, ownerDir)).toBe(1_000_000)
+  }
+})
+
+test('contextWindow は 4.6 以前の Claude 4 で [1m] が無ければ 200K を返す', () => {
+  const ownerDir = join(testTmpDir, 'proj')
+  writeSettings(join(ownerDir, '.claude'), 'settings.json', 'opus')
+  for (const id of ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'claude-opus-4-20250514']) {
+    expect(contextWindow(id, ownerDir)).toBe(200_000)
+  }
+})
+
+test('contextWindow は 4.6 以前の Claude 4 でも model に [1m] があれば 1M を返す', () => {
+  const ownerDir = join(testTmpDir, 'proj')
+  writeSettings(join(ownerDir, '.claude'), 'settings.json', 'opus[1m]')
+  expect(contextWindow(LEGACY_MODEL, ownerDir)).toBe(1_000_000)
 })
 
 test('contextWindow は local を project より優先する', () => {
   const ownerDir = join(testTmpDir, 'proj')
   writeSettings(join(ownerDir, '.claude'), 'settings.local.json', 'sonnet')
   writeSettings(join(ownerDir, '.claude'), 'settings.json', 'opus[1m]')
-  expect(contextWindow(ownerDir)).toBe(200_000)
+  expect(contextWindow(LEGACY_MODEL, ownerDir)).toBe(200_000)
 })
 
 test('contextWindow は project を user より優先する', () => {
   const ownerDir = join(testTmpDir, 'proj')
   writeSettings(join(ownerDir, '.claude'), 'settings.json', 'sonnet')
   writeSettings(process.env.CLAUDE_CONFIG_DIR as string, 'settings.json', 'opus[1m]')
-  expect(contextWindow(ownerDir)).toBe(200_000)
+  expect(contextWindow(LEGACY_MODEL, ownerDir)).toBe(200_000)
 })
 
 test('contextWindow は model を持たない設定を飛ばして次を見る', () => {
   const ownerDir = join(testTmpDir, 'proj')
   writeSettings(join(ownerDir, '.claude'), 'settings.local.json', undefined)
   writeSettings(process.env.CLAUDE_CONFIG_DIR as string, 'settings.json', 'opus[1m]')
-  expect(contextWindow(ownerDir)).toBe(1_000_000)
+  expect(contextWindow(LEGACY_MODEL, ownerDir)).toBe(1_000_000)
 })
 
-test('contextWindow は設定が無ければ 200K を返す', () => {
-  expect(contextWindow(join(testTmpDir, 'absent'))).toBe(200_000)
+test('contextWindow は設定が無ければ 4.6 以前の Claude 4 に 200K を返す', () => {
+  expect(contextWindow(LEGACY_MODEL, join(testTmpDir, 'absent'))).toBe(200_000)
 })
 
 // --- buildFooter ---
@@ -206,13 +219,27 @@ test('buildFooter は ctx% を切り捨てで計算する', () => {
   const ownerDir = join(testTmpDir, 'proj')
   const line = assistantLine({
     message: {
-      model: 'claude-opus-5',
+      model: LEGACY_MODEL,
       usage: { input_tokens: 100_000, cache_creation_input_tokens: 50_000, cache_read_input_tokens: 9_999 },
     },
   })
   const p = tmpFile('t.jsonl', `${line}\n`)
   // 159999 / 200000 = 79.99% -> 79%
   expect(buildFooter({ transcriptPath: p, ownerDir, usage: USAGE })).toContain('📊 79%')
+})
+
+test('buildFooter は 1M を標準で持つモデルの ctx% を 1M で割る', () => {
+  const ownerDir = join(testTmpDir, 'proj')
+  writeSettings(join(ownerDir, '.claude'), 'settings.json', 'opus')
+  const line = assistantLine({
+    message: {
+      model: 'claude-opus-5-5',
+      usage: { input_tokens: 1, cache_creation_input_tokens: 1_000, cache_read_input_tokens: 447_605 },
+    },
+  })
+  const p = tmpFile('t.jsonl', `${line}\n`)
+  // 448606 / 1_000_000 = 44.86% -> 44%
+  expect(buildFooter({ transcriptPath: p, ownerDir, usage: USAGE })).toContain('📊 44%')
 })
 
 test('buildFooter は transcript が無ければモデル行と ctx を省く', () => {

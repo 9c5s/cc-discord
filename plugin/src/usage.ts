@@ -38,7 +38,6 @@ const API_TIMEOUT_MS = 3_000
 // 試行の間隔の下限 (全セッションでキャッシュを介して共有する)
 // 使用量 API は Claude Code 本体や statusline と上限を共有しており 短い間隔で呼ぶと 429 を返す
 const MIN_ATTEMPT_INTERVAL_SEC = 60
-const STALE_SEC = 900 // この時間を超えて更新できていないキャッシュは表示に使わない
 
 export const usageCachePath = (): string => join(stateDir(), 'model-usage.json')
 
@@ -142,12 +141,8 @@ export async function fetchUsageSnapshot(
   }
 }
 
-// 最後に取得できてから STALE_SEC 以内かを判定する
-// 認証切れなどで更新が止まった際に古い値を出し続けないための足切りである
-function isFresh(cache: J): boolean {
-  const cachedAt = num(cache._cached_at)
-  return cachedAt !== null && nowSec() - cachedAt < STALE_SEC
-}
+// リセット時刻を過ぎたかを判定する (過ぎた枠の値はもう正しくない)
+const hasReset = (resetsAt: number | null): boolean => resetsAt !== null && resetsAt <= nowSec()
 
 // キャッシュの data 配列をモデル別枠へ変換する
 function toStoredEntries(data: unknown): ModelUsageEntry[] {
@@ -161,17 +156,16 @@ function toStoredBucket(value: unknown): RateBucket | null {
   if (!w) return null
   const percent = num(w.used_percentage)
   const resets = num(w.resets_at)
-  if (percent === null || resets === null) return null
+  if (percent === null || resets === null || hasReset(resets)) return null
   return { used_percentage: percent, resets_at: resets }
 }
 
 // キャッシュを 1 回だけ読んで 7d 全体とモデル別枠をまとめて取り出す
 // 取得しないときの代わりに使う経路で HTTP は発行しない
 // 1 回の描画で両方をこの結果から導出することで 描画途中の更新による時点のずれを避ける
-// 古すぎるキャッシュは両方とも捨てる (片方だけ古い値を混ぜないため)
+// 取得から時間が経っていても最後に取得できた値を返し リセット時刻を過ぎた枠だけを省く
 export function readCachedUsage(path = usageCachePath()): UsageSnapshot {
   const cache = readCache(path)
-  if (!isFresh(cache)) return { weekly: null, session: null, modelScoped: [] }
   return {
     weekly: toStoredBucket(cache.weekly),
     session: toStoredBucket(cache.session),
@@ -185,8 +179,9 @@ function toStoredEntry(item: unknown): ModelUsageEntry | null {
   if (!o) return null
   const name = o.display_name
   const percent = num(o.percent)
-  if (typeof name !== 'string' || !name || percent === null) return null
-  return { display_name: name, percent, resets_at: num(o.resets_at) }
+  const resets = num(o.resets_at)
+  if (typeof name !== 'string' || !name || percent === null || hasReset(resets)) return null
+  return { display_name: name, percent, resets_at: resets }
 }
 
 // キャッシュを書く (書けなくても今回の表示には影響しないため失敗は無視する)

@@ -252,10 +252,11 @@ test('fetchUsageSnapshot は通信例外でも null を返す', async () => {
 
 // --- readCachedUsage ---
 
-const FABLE_ENTRY = { display_name: 'Fable', percent: 88, resets_at: 123 }
-const WEEKLY_STORED = { used_percentage: 51, resets_at: 1787454000 }
+// リセット時刻を過ぎた枠は読み戻さないため 未来の時刻にしておく
+const FABLE_ENTRY = { display_name: 'Fable', percent: 88, resets_at: nowSec() + 86_400 }
+const WEEKLY_STORED = { used_percentage: 51, resets_at: nowSec() + 86_400 }
 
-const SESSION_STORED = { used_percentage: 63, resets_at: 1787464800 }
+const SESSION_STORED = { used_percentage: 63, resets_at: nowSec() + 3_600 }
 
 test('readCachedUsage は 5h と 7d 全体とモデル別枠を1回の読み取りで返す', () => {
   const p = tmpFile('cache.json')
@@ -295,16 +296,27 @@ test('readCachedUsage は weekly の値が不正なら null にする', () => {
   expect(readCachedUsage(p).weekly).toBeNull()
 })
 
-test('readCachedUsage は取得時刻の無いキャッシュを使わない', () => {
+test('readCachedUsage は取得から時間が経ったキャッシュでも値を返す', () => {
   const p = tmpFile('cache.json')
-  writeJson(p, { data: [FABLE_ENTRY], weekly: WEEKLY_STORED, session: SESSION_STORED })
-  expect(readCachedUsage(p)).toEqual({ weekly: null, session: null, modelScoped: [] })
+  writeJson(p, { _cached_at: nowSec() - 3_600, data: [FABLE_ENTRY], weekly: WEEKLY_STORED, session: SESSION_STORED })
+  expect(readCachedUsage(p)).toEqual({
+    weekly: WEEKLY_STORED,
+    session: SESSION_STORED,
+    modelScoped: [FABLE_ENTRY],
+  })
 })
 
-test('readCachedUsage は STALE_SEC を超えて古いキャッシュをすべて捨てる', () => {
+test('readCachedUsage はリセット時刻を過ぎた枠を省く', () => {
   const p = tmpFile('cache.json')
-  writeJson(p, { _cached_at: nowSec() - 901, data: [FABLE_ENTRY], weekly: WEEKLY_STORED, session: SESSION_STORED })
-  expect(readCachedUsage(p)).toEqual({ weekly: null, session: null, modelScoped: [] })
+  const passed = nowSec() - 1
+  const noReset = { display_name: 'Opus', percent: 10, resets_at: null }
+  writeJson(p, {
+    _cached_at: nowSec(),
+    data: [{ ...FABLE_ENTRY, resets_at: passed }, noReset],
+    weekly: WEEKLY_STORED,
+    session: { ...SESSION_STORED, resets_at: passed },
+  })
+  expect(readCachedUsage(p)).toEqual({ weekly: WEEKLY_STORED, session: null, modelScoped: [noReset] })
 })
 
 // --- currentUsage ---
@@ -314,7 +326,6 @@ const SNAPSHOT = {
   session: SESSION_STORED,
   modelScoped: [FABLE_ENTRY],
 }
-const EMPTY = { weekly: null, session: null, modelScoped: [] }
 
 test('currentUsage は取得した値を返しキャッシュへ書く', async () => {
   const p = tmpFile('cache.json')
@@ -328,10 +339,10 @@ test('currentUsage は取得に失敗したらキャッシュの値を返す', a
   expect(await currentUsage(p, async () => null)).toEqual(SNAPSHOT)
 })
 
-test('currentUsage は取得に失敗しキャッシュが古ければ空の組を返す', async () => {
+test('currentUsage は取得に失敗したら取得から時間が経ったキャッシュでも値を返す', async () => {
   const p = tmpFile('cache.json')
-  writeJson(p, { _cached_at: nowSec() - 901, data: [FABLE_ENTRY], weekly: WEEKLY_STORED, session: SESSION_STORED })
-  expect(await currentUsage(p, async () => null)).toEqual(EMPTY)
+  writeJson(p, { _cached_at: nowSec() - 3_600, data: [FABLE_ENTRY], weekly: WEEKLY_STORED, session: SESSION_STORED })
+  expect(await currentUsage(p, async () => null)).toEqual(SNAPSHOT)
 })
 
 test('currentUsage はキャッシュを書けなくても取得した値を返す', async () => {

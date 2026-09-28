@@ -10,9 +10,10 @@ import { readCachedUsage, type UsageSnapshot } from './usage'
 
 // transcript は末尾だけ読む (長い会話でも一定コストにする)
 const TAIL_BYTES = 512 * 1024
-// 既定の context window (settings の model に [1m] があるときだけ 1M にする)
-const DEFAULT_CONTEXT_WINDOW = 200_000
+const LEGACY_CONTEXT_WINDOW = 200_000
 const ONE_MILLION_CONTEXT_WINDOW = 1_000_000
+// 1M を標準で持たない世代 (Claude 4 系の 4.6 以前)
+const LEGACY_MODEL_ID = /^claude-(opus|sonnet|haiku)-4(-[0-6])?(-\d{8})?$/
 
 type J = Record<string, unknown>
 const obj = (v: unknown): J | null => (typeof v === 'object' && v !== null ? (v as J) : null)
@@ -108,11 +109,12 @@ function settingsModel(ownerDir: string | null): string | null {
   return null
 }
 
-// context window を settings の model から決める
-// --model の CLI 指定は proxy から読めないため その場合は実際と異なる (既知の制限)
-export function contextWindow(ownerDir: string | null): number {
-  const model = settingsModel(ownerDir)
-  return model?.endsWith('[1m]') ? ONE_MILLION_CONTEXT_WINDOW : DEFAULT_CONTEXT_WINDOW
+// context window を transcript のモデル id と settings の model から決める
+// 4.6 以前の世代だけ settings の [1m] を見て それ以外は 1M とする
+// --model の CLI 指定は proxy から読めないため 4.6 以前をその形で 1M にした場合は実際と異なる (既知の制限)
+export function contextWindow(modelId: string, ownerDir: string | null): number {
+  if (!LEGACY_MODEL_ID.test(modelId)) return ONE_MILLION_CONTEXT_WINDOW
+  return settingsModel(ownerDir)?.endsWith('[1m]') ? ONE_MILLION_CONTEXT_WINDOW : LEGACY_CONTEXT_WINDOW
 }
 
 // footer を組み立てる
@@ -129,7 +131,7 @@ export function buildFooter(input: {
 
   const data: J = {}
   if (entry) {
-    const window = contextWindow(input.ownerDir)
+    const window = contextWindow(entry.model, input.ownerDir)
     data.model = { display_name: modelDisplayName(entry.model) }
     // effort はモデル名と同じ行にしか出ないため モデルが取れないときは effort も出ない
     const effort = entry.effort ?? env.CLAUDE_EFFORT

@@ -568,7 +568,7 @@ state dir の既定は `~/.claude/channels/discord` で、`DISCORD_STATE_DIR` �
 | `logs/watch-<owner>.log` | SessionStart hook のデバッグログ (`DISCORD_NOTIFY_DEBUG` を設定したときだけ書く) |
 | `model-usage.json` | 使用量 API のキャッシュと試行時刻 |
 
-新しく書くファイルは、PID 付きの一時ファイルへ書いてから rename します。
+ポインタと `model-usage.json` は、PID 付きの一時ファイルへ書いてから rename します。
 ファイル名に埋める識別子は、形式を検証し、解決後のパスが対象ディレクトリの直下であることを確認してから、読み書きします。
 
 ロックは `openSync(path, 'wx', 0o600)` で作成します。
@@ -623,14 +623,36 @@ cc-discord は、取り込むまで更新されないため、取り込む時期
 上流に新しく現れたファイルは、取り込むかどうかを保守者が決められるよう、一覧で報告します。
 `README.md` と `ACCESS.md` は、報告の対象外です。
 
-`merge` は、すべてのファイルでエラーが無いことを確認してから、`plugin/` に結果を書き、`upstream/discord/` を新版で置き換え、`plugin/upstream.json` を更新します。
+`merge` は、すべてのファイルでエラーが無いことを確認してから、`plugin/` に結果を書き、`plugin/upstream.json` を更新し、最後に `upstream/discord/` を新版で置き換えます。
 衝突したファイルは、衝突マーカーを `plugin/` 側に残して報告し、非 0 で終わります。
 衝突があっても、`upstream/discord/` と `plugin/upstream.json` は新版に更新されます。
 
 `git merge-file` の終了コードは、0 が衝突なし、1 から 127 が衝突の数です。
 それ以外 (エラーは 255 になります) と、起動の失敗は、エラーとして扱います。
-エラーのときは、`plugin/`、`upstream/discord/`、`plugin/upstream.json` のどれも変更しません。
 エラーを衝突として扱うと、取り込めていないまま基準の版だけが進み、次の取り込みで差分を失うためです。
+
+`git merge-file` のエラーと、書き込みの前に行う次の検査のエラーのときは、`plugin/`、`upstream/discord/`、`plugin/upstream.json` のどれも変更しません。
+
+- 新版の版を読めるか。
+- 新版に追跡対象がそろっているか。
+  `plugin/` にある追跡対象が、取り込み済みの版にあるか。
+- 取り込み元が、`upstream/discord/` と `plugin/` のどちらとも重ならないか。
+  同じディレクトリ、その中のディレクトリ、それを含むディレクトリを、重なりとみなします。
+  リンクは解決してから比べ、Windows では大文字と小文字を区別しません。
+
+書き込みは、次の順に行います。
+
+1. `upstream/discord.tmp/` を作り、その中に新版の写しを用意します。
+   用意に失敗したときは、`upstream/discord.tmp/` を消して終わるため、何も変わりません。
+2. `plugin/` に結果を書き、`plugin/upstream.json` を更新します。
+3. 旧版の `upstream/discord/` を `upstream/discord.tmp/` の中へ rename で退避し、新版の写しを `upstream/discord/` へ rename してから、`upstream/discord.tmp/` を消します。
+
+基準の版を最後に入れ替えるのは、2 の途中で失敗しても、取り込む前の基準の版を残すためです。
+ただし、2 と 3 の途中で I/O が失敗すると、部分的に変更されたまま終わることがあります。
+取り込みは作業ブランチで行うので、`git status` で変更を確認し、`git checkout` で戻すか、同じ取り込みをやり直します。
+やり直しでは、`plugin/` にすでに書かれた変更が新版の変更と同じになるため、その部分は衝突しません。
+`upstream/discord.tmp/` が残っていると、`merge` は何も変更せずに失敗します。
+`upstream/discord/` を `git status` で確認し、必要なら `git checkout` で戻してから、`upstream/discord.tmp/` を消します。
 
 手順は次のとおりです。
 

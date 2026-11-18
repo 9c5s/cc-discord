@@ -74,6 +74,8 @@ export type Extension = {
   footer(): Promise<string>
   start(): void
   stop(): void
+  // 拡張のロガーへ 1 行書く
+  log(msg: string): void
 }
 
 export function createExtension(deps: {
@@ -293,5 +295,7 @@ export function createExtension(deps: {
       for (const h of handles.splice(0)) timers.clearInterval(h)
       typing.stopAll()
     },
+
+    log,
   }
 }

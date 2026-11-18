@@ -390,6 +390,12 @@ test('stopTyping は継続中の typing を止める', async () => {
 
 // --- outbound ---
 
+test('log は拡張のロガーへそのまま書く', () => {
+  const w = setup()
+  w.ext.log('[discord] postAnchor failed: Error: boom')
+  expect(w.logs).toEqual(['[discord] postAnchor failed: Error: boom'])
+})
+
 test('owned は担当外のチャンネルで例外を投げ 担当チャンネルとそのスレッドは通す', () => {
   const w = setup()
   expect(w.ext.owned(ownerChannel)).toBe(ownerChannel)

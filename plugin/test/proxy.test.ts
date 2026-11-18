@@ -555,6 +555,24 @@ test('handleClientMessage は担当外の download_attachment を遮断する', 
   expect(h.toChild).toEqual([])
 })
 
+test('handleClientMessage は担当外のチャンネルでの create_thread を子へ転送しない', async () => {
+  const h = harness()
+  const msg = call('create_thread', { chat_id: FOREIGN, name: 'topic', message_id: MSG })
+  await handleClientMessage(msg, raw(msg), h.ctx)
+  expect(h.toChild).toEqual([])
+  const res = JSON.parse(h.toClient[0]) as Json
+  expect((res.result as Json).isError).toBe(true)
+  expect(res.id).toBe(7)
+})
+
+test('handleClientMessage は担当チャンネルでの create_thread を子へ転送する', async () => {
+  const h = harness()
+  const msg = call('create_thread', { chat_id: CH, name: 'topic', message_id: MSG })
+  await handleClientMessage(msg, raw(msg), h.ctx)
+  expect(h.toChild).toEqual([raw(msg)])
+  expect(h.toClient).toEqual([])
+})
+
 test('handleClientMessage は担当なしのセッションでは遮断しない', async () => {
   const h = harness({ ownerCtx: { kind: 'none' }, ownerChannelId: null })
   const msg = call('react', { chat_id: FOREIGN, message_id: MSG, emoji: '👍' })

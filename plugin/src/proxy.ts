@@ -268,6 +268,7 @@ const TARGET_ARG: Record<string, string> = {
   react: 'chat_id',
   download_attachment: 'chat_id',
   fetch_messages: 'channel',
+  create_thread: 'chat_id',
 }
 
 // 宛先が担当のものかを確かめる (担当外なら理由を返す)

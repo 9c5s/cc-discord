@@ -111,6 +111,10 @@ take over は公式 0.0.4 の `reply` / `edit_message` の意味論を移植し�
 これを防ぐため、`official.ts` に対応表を持ち、起動する `server.ts` の SHA-256 が表に無ければ子プロセスを起動せずに終了コード 1 で終わる。
 Claude Code はこれを接続失敗として扱い、そのセッションは Discord 無しになる。
 
+0.0.5 の差分は、`create_thread` ツールの追加と、メッセージから作ったスレッドの開始メッセージ (`ThreadStarterMessage`) を inbound から除く変更だけである。
+`reply` と `edit_message` の schema と意味論、outbound gate、送信可否の判定、チャンク分割、通知の meta、起動コマンド、skills は 0.0.4 と同一なので、take over は変更せずに対応表へ追加した。
+`create_thread` は親チャンネルを `chat_id` で受け取るため、他の宛先付きツールと同じく子へ渡す前に担当を判定する。
+
 対応外のまま中継だけ続ける passthrough は採らない。
 passthrough では全セッションがルーティングもロックも持たない公式 server になり、重複処理と担当外への配送が再発するためである。
 
@@ -213,7 +217,7 @@ DM にはスレッドを作れないため、DM チャンネル自身を宛先�
 これだけを条件にすると、あるプロジェクトのセッションから、同じ bot に登録された別プロジェクトのチャンネルへ返信も履歴取得もできてしまい、担当の分離が inbound 側にしか効かない。
 Discord のメッセージ本文は外部入力なので、別チャンネルの id を指す指示が紛れ込む経路も現実に存在する。
 
-そこで proxy は、宛先を引数に持つ 5 つのツールすべてを担当で絞る。
+そこで proxy は、宛先を引数に持つ 6 つのツールすべてを担当で絞る。
 
 | ツール | 引数 | 経路 |
 | --- | --- | --- |
@@ -222,6 +226,7 @@ Discord のメッセージ本文は外部入力なので、別チャンネルの
 | `react` | `chat_id` | 子へ渡す前に判定する |
 | `download_attachment` | `chat_id` | 子へ渡す前に判定する |
 | `fetch_messages` | `channel` | 子へ渡す前に判定する |
+| `create_thread` | `chat_id` | 子へ渡す前に判定する |
 
 判定は inbound と同じ決定関数 (`decideOutbound` から `decideDelivery` を呼ぶ) で行う。
 allowlist の判定 (`isAllowedTarget`) を通った後に、担当の判定を重ねる形である。

@@ -133,6 +133,7 @@ test('追跡対象でない新しいファイルを added に挙げる', () => {
   write(newDir, 'ACCESS.md', 'x\n')
   write(newDir, 'bun.lock', 'x\n')
   write(newDir, 'node_modules/pkg/index.js', 'x\n')
+  write(newDir, '.git/HEAD', 'x\n')
 
   const result = mergeUpstream({ repoRoot, newDir, run: cleanRun })
 
@@ -209,25 +210,52 @@ test('plugin に無い追跡対象は新版をそのまま写す', () => {
   expect(calls).not.toContain(join(pluginDir, 'package.json'))
 })
 
-test('run には plugin と上流の基準版と新版の順でパスを渡す', () => {
-  seed(SAME)
+test('run には plugin と上流の基準版と 取り込み元そのものではなくその写しの順でパスを渡す', () => {
+  seed({ base: 'a\n', plugin: 'a\n', next: 'a2\n' })
   const calls: string[][] = []
 
   mergeUpstream({
     repoRoot,
     newDir,
     run: (ours, base, theirs) => {
-      calls.push([ours, base, theirs])
+      calls.push([ours, base, theirs, readFileSync(theirs, 'utf8')])
       return { code: 0, stdout: 'merged\n' }
     },
   })
 
   expect(calls).toHaveLength(TRACKED_FILES.length)
-  expect(calls[0]).toEqual([
-    join(pluginDir, TRACKED_FILES[0]),
-    join(upstreamDir, TRACKED_FILES[0]),
-    join(newDir, TRACKED_FILES[0]),
-  ])
+  const [ours, base, theirs, theirsContent] = calls[0]
+  expect([ours, base]).toEqual([join(pluginDir, TRACKED_FILES[0]), join(upstreamDir, TRACKED_FILES[0])])
+  expect(theirs).not.toBe(join(newDir, TRACKED_FILES[0]))
+  expect(theirsContent).toBe('a2\n')
+})
+
+test('取り込みの途中で取り込み元が更新されても 取り込みを始めた時点の内容で取り込む', () => {
+  seed({ base: 'a\n', plugin: 'a\n', next: 'a2\n' }, '0.0.6')
+  write(newDir, 'bun.lock', 'lock 0.0.6\n')
+  const start = snapshot(newDir)
+  const startSha = sha256File(join(newDir, 'server.ts'))
+  let updated = false
+  // 1 件目のマージの後に clone が次の版へ更新された状況を作る
+  const run: MergeRunner = (_ours, _base, theirs) => {
+    const stdout = readFileSync(theirs, 'utf8')
+    if (!updated) {
+      updated = true
+      for (const f of Object.keys(start)) write(newDir, f, `updated ${f}\n`)
+      write(newDir, '.claude-plugin/plugin.json', pluginJson('0.0.7'))
+    }
+    return { code: 0, stdout }
+  }
+
+  mergeUpstream({ repoRoot, newDir, run })
+
+  for (const f of [...TRACKED_FILES, 'bun.lock']) expect(read(pluginDir, f)).toBe(start[f])
+  expect(snapshot(upstreamDir)).toEqual(start)
+  expect(JSON.parse(read(pluginDir, 'upstream.json'))).toEqual({
+    source: SOURCE,
+    version: '0.0.6',
+    server_sha256: startSha,
+  })
 })
 
 test('compareDirs は内容が変わった追跡対象だけを changed に挙げる', () => {
@@ -378,23 +406,17 @@ test('取り込みの後に upstream の下へ作業用のディレクトリを�
   expect(readdirSync(join(repoRoot, 'upstream'))).toEqual(['discord'])
 })
 
-test('新版の写しの用意で読み取りに失敗したら 例外を投げ何も変えない', () => {
+test('取り込み元の写しの作成に失敗したら 例外を投げ何も変えない', () => {
   seed({ base: 'a\n', plugin: 'a\n', next: 'a2\n' })
   write(pluginDir, 'upstream.json', '{"version":"0.0.5"}')
+  // 指す先の無いリンクはファイルとして列挙され 写すときに読めない
+  const gone = join(tmp, 'gone')
+  mkdirSync(gone)
+  symlinkSync(gone, join(newDir, 'dangling'), 'junction')
+  rmSync(gone, { recursive: true })
   const before = snapshot(repoRoot)
-  const manifest = join(newDir, '.claude-plugin', 'plugin.json')
-  let count = 0
-  // マージの後に 写すだけのファイルを読めない形 (ディレクトリ) に変える
-  const run: MergeRunner = () => {
-    count += 1
-    if (count === TRACKED_FILES.length) {
-      rmSync(manifest)
-      mkdirSync(manifest)
-    }
-    return { code: 0, stdout: 'merged\n' }
-  }
 
-  expect(() => mergeUpstream({ repoRoot, newDir, run })).toThrow()
+  expect(() => mergeUpstream({ repoRoot, newDir, run: cleanRun })).toThrow()
 
   expect(snapshot(repoRoot)).toEqual(before)
 })

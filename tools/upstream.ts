@@ -58,13 +58,16 @@ export function sha256File(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
-// dir 配下のファイルを相対パス (区切りは /) で返す (node_modules は除く)
+// 新版のファイルの一覧と取り込み元の写しに含めないディレクトリ
+const SKIPPED_DIRS = ['node_modules', '.git']
+
+// dir 配下のファイルを相対パス (区切りは /) で返す
 function listFiles(dir: string, prefix = ''): string[] {
   const files: string[] = []
   for (const entry of readdirSync(join(dir, prefix), { withFileTypes: true })) {
     const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`
     if (!entry.isDirectory()) files.push(rel)
-    else if (entry.name !== 'node_modules') files.push(...listFiles(dir, rel))
+    else if (!SKIPPED_DIRS.includes(entry.name)) files.push(...listFiles(dir, rel))
   }
   return files.sort()
 }
@@ -95,14 +98,12 @@ const defaultRun: MergeRunner = (ours, base, theirs) => {
   return { code: result.status, stdout: result.stdout }
 }
 
-// 新版の写しを dir に作る
-function copySnapshot(newDir: string, dir: string): void {
-  for (const f of [...TRACKED_FILES, ...COPIED_FILES]) {
-    const from = join(newDir, f)
-    if (!existsSync(from)) continue
-    const to = join(dir, f)
-    mkdirSync(dirname(to), { recursive: true })
-    copyFileSync(from, to)
+// files を from から to へ同じ相対パスで写す
+function copyFiles(from: string, to: string, files: string[]): void {
+  for (const f of files) {
+    const dest = join(to, f)
+    mkdirSync(dirname(dest), { recursive: true })
+    copyFileSync(join(from, f), dest)
   }
 }
 
@@ -118,29 +119,36 @@ function overlaps(a: string, b: string): boolean {
   return within(x, y) || within(y, x)
 }
 
-export function mergeUpstream(opts: { repoRoot: string; newDir: string; run?: MergeRunner }): {
+type Prepared = {
   version: string
   conflicts: string[]
   added: string[]
-} {
-  const { repoRoot, newDir, run = defaultRun } = opts
-  const upstreamDir = join(repoRoot, 'upstream', 'discord')
-  const pluginDir = join(repoRoot, 'plugin')
-  // 新版の写しと退避した旧版を置く (途中で失敗すると残る)
-  const workDir = join(repoRoot, 'upstream', 'discord.tmp')
+  results: Map<string, string | Buffer>
+  meta: { source: string; version: string; server_sha256: string }
+}
 
-  const version = readVersion(newDir)
+// 取り込み元を source へ写し 以後はその写しだけを読んでマージの結果と次の基準の版 (staged) を用意する
+// source と staged の外には書き込まない
+function prepare(p: {
+  newDir: string
+  source: string
+  staged: string
+  upstreamDir: string
+  pluginDir: string
+  run: MergeRunner
+}): Prepared {
+  const { newDir, source, staged, upstreamDir, pluginDir, run } = p
+  copyFiles(newDir, source, listFiles(newDir))
+
+  const version = readVersion(source)
   if (version === null) throw new Error(`新版の .claude-plugin/plugin.json から版を読み取れません: ${newDir}`)
-  for (const [label, dir] of [['upstream/discord', upstreamDir], ['plugin', pluginDir]]) {
-    if (overlaps(newDir, dir)) throw new Error(`取り込み元が ${label} と重なっています: ${newDir}`)
-  }
-  const { added } = compareDirs(upstreamDir, newDir)
+  const { added } = compareDirs(upstreamDir, source)
 
   // 全結果を集めてから書き込む (1 件でもエラーなら何も書かない)
   const results = new Map<string, string | Buffer>()
   const conflicts: string[] = []
   for (const f of TRACKED_FILES) {
-    const theirs = join(newDir, f)
+    const theirs = join(source, f)
     if (!existsSync(theirs)) throw new Error(`新版に追跡対象 ${f} がありません。`)
     const ours = join(pluginDir, f)
     if (!existsSync(ours)) {
@@ -157,19 +165,42 @@ export function mergeUpstream(opts: { repoRoot: string; newDir: string; run?: Me
     if (code > 0) conflicts.push(f)
     results.set(f, stdout)
   }
-  const lockfile = join(newDir, 'bun.lock')
+  const lockfile = join(source, 'bun.lock')
   if (existsSync(lockfile)) results.set('bun.lock', readFileSync(lockfile))
-  const meta = { source: SOURCE, version, server_sha256: sha256File(join(newDir, 'server.ts')) }
+  const meta = { source: SOURCE, version, server_sha256: sha256File(join(source, 'server.ts')) }
 
-  // plugin へ書く前に新版の写しを用意する (失敗したら何も変えずに終える)
+  const snapshotFiles = [...TRACKED_FILES, ...COPIED_FILES].filter((f) => existsSync(join(source, f)))
+  copyFiles(source, staged, snapshotFiles)
+  return { version, conflicts, added, results, meta }
+}
+
+export function mergeUpstream(opts: { repoRoot: string; newDir: string; run?: MergeRunner }): {
+  version: string
+  conflicts: string[]
+  added: string[]
+} {
+  const { repoRoot, newDir, run = defaultRun } = opts
+  const upstreamDir = join(repoRoot, 'upstream', 'discord')
+  const pluginDir = join(repoRoot, 'plugin')
+  // 取り込み元の写しと次の基準の版と退避した旧版を置く (途中で失敗すると残る)
+  const workDir = join(repoRoot, 'upstream', 'discord.tmp')
   const staged = join(workDir, 'new')
+
+  // 重なっていると写しが写し先を含むため 写す前に元のパスで確かめる
+  for (const [label, dir] of [['upstream/discord', upstreamDir], ['plugin', pluginDir]]) {
+    if (overlaps(newDir, dir)) throw new Error(`取り込み元が ${label} と重なっています: ${newDir}`)
+  }
+
+  // plugin へ書く前にすべてを用意する (失敗したら何も変えずに終える)
   mkdirSync(workDir)
+  let prepared: Prepared
   try {
-    copySnapshot(newDir, staged)
+    prepared = prepare({ newDir, source: join(workDir, 'source'), staged, upstreamDir, pluginDir, run })
   } catch (error) {
     rmSync(workDir, { recursive: true, force: true })
     throw error
   }
+  const { version, conflicts, added, results, meta } = prepared
 
   for (const [f, content] of results) {
     const path = join(pluginDir, f)

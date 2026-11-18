@@ -345,13 +345,6 @@ test('currentUsage は取得に失敗したら取得から時間が経ったキ�
   expect(await currentUsage(p, async () => null)).toEqual(SNAPSHOT)
 })
 
-test('currentUsage はキャッシュを書けなくても取得した値を返す', async () => {
-  // キャッシュのパスがディレクトリだと writeAtomic の rename が失敗する
-  const p = tmpFile('cache.json')
-  mkdirSync(p)
-  expect(await currentUsage(p, async () => SNAPSHOT)).toEqual(SNAPSHOT)
-})
-
 // 呼ばれたかを記録する取得関数
 function fetchSpy(result: typeof SNAPSHOT | null) {
   const spy = { called: 0, fn: async () => {
@@ -360,6 +353,15 @@ function fetchSpy(result: typeof SNAPSHOT | null) {
   } }
   return spy
 }
+
+test('currentUsage は試行時刻を記録できなければ取得せずキャッシュの値を返す', async () => {
+  // キャッシュのパスがディレクトリだと writeAtomic の rename が失敗する
+  const p = tmpFile('cache.json')
+  mkdirSync(p)
+  const spy = fetchSpy(SNAPSHOT)
+  expect(await currentUsage(p, spy.fn)).toEqual({ weekly: null, session: null, modelScoped: [] })
+  expect(spy.called).toBe(0)
+})
 
 test('currentUsage は直近 60 秒以内に試行済みなら取得せずキャッシュを返す', async () => {
   const p = tmpFile('cache.json')

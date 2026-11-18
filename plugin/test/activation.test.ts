@@ -1,24 +1,9 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test'
-import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'fs'
+import { mkdirSync, rmSync, writeFileSync, existsSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import {
-  HEARTBEAT_MAX_AGE_MS,
-  HEARTBEAT_TTL_MS,
-  POINTER_MAX_AGE_MS,
-  currentActivation,
-  deleteHeartbeat,
-  deletePointer,
-  inspectHeartbeat,
-  isFresh,
-  readHeartbeat,
-  readPointer,
-  sessionDir,
-  sweepStale,
-  writeHeartbeat,
-  writePointer,
-  type Pointer,
-} from '../src/activation'
+import { deletePointer, readPointer, sessionDir, sweepStale, writePointer, type Pointer } from '../src/activation'
+import { lookupProcess, type ProcessLookup } from '../src/process-tree'
 
 const testTmpDir = join(tmpdir(), `discord-activation-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`)
 let savedStateDir: string | undefined
@@ -38,47 +23,38 @@ afterEach(() => {
 const RUN = 'a'.repeat(32)
 const ACT = 'b'.repeat(32)
 const SESSION = '57db69e6-bf68-407b-8958-680297cb447f'
+const STARTED = 1_700_000_000_000
+const WRITTEN = 1_700_000_100_000
 
 function pointer(over: Partial<Pointer> = {}): Pointer {
   return {
     claude_pid: 4321,
-    run_id: RUN,
+    claude_started_at: STARTED,
     session_id: SESSION,
     activation_id: ACT,
     transcript_path: 'C:\\transcripts\\x.jsonl',
     source: 'startup',
-    written_at: Date.now(),
+    written_at: WRITTEN,
     ...over,
   }
 }
 
-// --- isFresh ---
-
-test('isFresh は TTL 以内の書き込み時刻を鮮度内とする', () => {
-  const now = 1_000_000
-  expect(isFresh(now, 15_000, now)).toBe(true)
-  expect(isFresh(now - 15_000, 15_000, now)).toBe(true)
-  expect(isFresh(now - 1, 15_000, now)).toBe(true)
-})
-
-test('isFresh は TTL を超えた書き込み時刻を失効とする', () => {
-  const now = 1_000_000
-  expect(isFresh(now - 15_001, 15_000, now)).toBe(false)
-})
-
-test('isFresh は未来の書き込み時刻を失効とする', () => {
-  const now = 1_000_000
-  expect(isFresh(now + 1, 15_000, now)).toBe(false)
-})
-
-test('isFresh は数値でない値と有限でない値を失効とする', () => {
-  const now = 1_000_000
-  expect(isFresh('1000000', 15_000, now)).toBe(false)
-  expect(isFresh(null, 15_000, now)).toBe(false)
-  expect(isFresh(undefined, 15_000, now)).toBe(false)
-  expect(isFresh(NaN, 15_000, now)).toBe(false)
-  expect(isFresh(Infinity, 15_000, now)).toBe(false)
-})
+// run_id を持ち claude_started_at を持たない旧形式のポインタを書く
+function writeLegacyPointer(pid: number, writtenAt: number): void {
+  mkdirSync(sessionDir(), { recursive: true })
+  writeFileSync(
+    join(sessionDir(), `${pid}.json`),
+    JSON.stringify({
+      claude_pid: pid,
+      run_id: RUN,
+      session_id: SESSION,
+      activation_id: ACT,
+      transcript_path: 'C:\\transcripts\\x.jsonl',
+      source: 'startup',
+      written_at: writtenAt,
+    }),
+  )
+}
 
 // --- writePointer / readPointer ---
 
@@ -100,10 +76,27 @@ test('writePointer は既存のポインタを置き換える', () => {
   expect(readPointer(4321)).toEqual(next)
 })
 
-test('writePointer は run_id が無いセッションのポインタも書く', () => {
-  const p = pointer({ run_id: null })
+test('writePointer は claude_started_at を持たないポインタも書く', () => {
+  const p = pointer()
+  delete p.claude_started_at
   expect(writePointer(p)).toBe(true)
-  expect(readPointer(4321)).toEqual(p)
+  const read = readPointer(4321)
+  expect(read).toEqual(p)
+  expect(read && 'claude_started_at' in read).toBe(false)
+})
+
+test('readPointer は run_id を持つ旧形式のポインタも読み run_id を取り込まない', () => {
+  writeLegacyPointer(4321, WRITTEN)
+  const read = readPointer(4321)
+  expect(read).toEqual({
+    claude_pid: 4321,
+    session_id: SESSION,
+    activation_id: ACT,
+    transcript_path: 'C:\\transcripts\\x.jsonl',
+    source: 'startup',
+    written_at: WRITTEN,
+  })
+  expect(read && 'run_id' in read).toBe(false)
 })
 
 test('readPointer はファイルが無ければ null を返す', () => {
@@ -129,16 +122,17 @@ test('readPointer は識別子の形式が不正なポインタを拒否する',
   for (const bad of [
     { session_id: 'not-a-uuid' },
     { activation_id: 'zz' },
-    { run_id: 'zz' },
     { source: 'unknown' },
     { written_at: 'now' },
+    { claude_started_at: 'then' },
+    { claude_started_at: null },
   ]) {
     writeFileSync(join(sessionDir(), '4321.json'), JSON.stringify({ ...pointer(), ...bad }))
     expect(readPointer(4321)).toBe(null)
   }
 })
 
-test('readPointer はファイル名と内容の claude_pid が食い違うポインタを拒否する', () => {
+test('readPointer はファイル名と内容の claude_pid が一致しないポインタを拒否する', () => {
   mkdirSync(sessionDir(), { recursive: true })
   writeFileSync(join(sessionDir(), '4321.json'), JSON.stringify(pointer({ claude_pid: 9999 })))
   expect(readPointer(4321)).toBe(null)
@@ -161,180 +155,107 @@ test('deletePointer はポインタが無くても true を返す', () => {
   expect(deletePointer(4321)).toBe(true)
 })
 
-// --- heartbeat ---
-
-test('writeHeartbeat は run_id と時刻を書き readHeartbeat が読む', () => {
-  const now = Date.now()
-  expect(writeHeartbeat(4321, RUN, now)).toBe(true)
-  expect(readHeartbeat(4321, RUN)).toEqual({ run_id: RUN, written_at: now })
-})
-
-test('writeHeartbeat は run ごとに別のファイルへ書く', () => {
-  const other = 'c'.repeat(32)
-  writeHeartbeat(4321, RUN, 1)
-  writeHeartbeat(4321, other, 2)
-  expect(readHeartbeat(4321, RUN)?.written_at).toBe(1)
-  expect(readHeartbeat(4321, other)?.written_at).toBe(2)
-})
-
-test('readHeartbeat は内容の run_id が要求と違えば null を返す', () => {
-  mkdirSync(sessionDir(), { recursive: true })
-  writeFileSync(join(sessionDir(), `4321.${RUN}.heartbeat`), JSON.stringify({ run_id: 'c'.repeat(32), written_at: 1 }))
-  expect(readHeartbeat(4321, RUN)).toBe(null)
-})
-
-test('readHeartbeat はファイルが無ければ null を返す', () => {
-  expect(readHeartbeat(4321, RUN)).toBe(null)
-})
-
-test('readHeartbeat は解析できないファイルで null を返す', () => {
-  mkdirSync(sessionDir(), { recursive: true })
-  writeFileSync(join(sessionDir(), `4321.${RUN}.heartbeat`), 'broken')
-  expect(readHeartbeat(4321, RUN)).toBe(null)
-})
-
-test('readHeartbeat は不正な run_id では読まない', () => {
-  expect(readHeartbeat(4321, '../evil')).toBe(null)
-})
-
-test('deleteHeartbeat は自分の run の heartbeat だけを削除する', () => {
-  writeHeartbeat(4321, RUN, Date.now())
-  expect(deleteHeartbeat(4321, RUN)).toBe(true)
-  expect(existsSync(join(sessionDir(), `4321.${RUN}.heartbeat`))).toBe(false)
-})
-
-test('deleteHeartbeat は内容の run_id が自分と違えば削除しない', () => {
-  mkdirSync(sessionDir(), { recursive: true })
-  const f = join(sessionDir(), `4321.${RUN}.heartbeat`)
-  writeFileSync(f, JSON.stringify({ run_id: 'c'.repeat(32), written_at: 1 }))
-  expect(deleteHeartbeat(4321, RUN)).toBe(false)
-  expect(readFileSync(f, 'utf8')).toContain('c'.repeat(32))
-})
-
-test('HEARTBEAT_TTL_MS は 15 秒である', () => {
-  expect(HEARTBEAT_TTL_MS).toBe(15_000)
-})
-
-// --- inspectHeartbeat ---
-
-test('inspectHeartbeat は不在と鮮度内と失効を区別する', () => {
-  const now = 1_000_000
-  expect(inspectHeartbeat(4321, RUN, now)).toEqual({ state: 'missing' })
-  writeHeartbeat(4321, RUN, now - 1_000)
-  expect(inspectHeartbeat(4321, RUN, now)).toEqual({ state: 'fresh' })
-  writeHeartbeat(4321, RUN, now - HEARTBEAT_TTL_MS - 1)
-  expect(inspectHeartbeat(4321, RUN, now)).toEqual({ state: 'expired' })
-})
-
-test('inspectHeartbeat は解析できない heartbeat を error として扱う', () => {
-  mkdirSync(sessionDir(), { recursive: true })
-  writeFileSync(join(sessionDir(), `4321.${RUN}.heartbeat`), 'broken')
-  expect(inspectHeartbeat(4321, RUN, 1_000_000)).toEqual({ state: 'error' })
-})
-
-test('inspectHeartbeat は run_id が食い違う heartbeat を error として扱う', () => {
-  mkdirSync(sessionDir(), { recursive: true })
-  writeFileSync(join(sessionDir(), `4321.${RUN}.heartbeat`), JSON.stringify({ run_id: 'c'.repeat(32), written_at: 1 }))
-  expect(inspectHeartbeat(4321, RUN, 1_000_000)).toEqual({ state: 'error' })
-})
-
-// --- currentActivation ---
-
-test('currentActivation は run_id が一致するポインタを現行として返す', () => {
-  const p = pointer()
-  writePointer(p)
-  expect(currentActivation(4321, RUN)).toEqual(p)
-})
-
-test('currentActivation は run_id が一致しなければ null を返す', () => {
-  writePointer(pointer())
-  expect(currentActivation(4321, 'c'.repeat(32))).toBe(null)
-})
-
-test('currentActivation は run_id を持たない呼び出しでは null を返す', () => {
-  writePointer(pointer({ run_id: null }))
-  expect(currentActivation(4321, null)).toBe(null)
-})
-
-test('currentActivation はポインタが無ければ null を返す', () => {
-  expect(currentActivation(4321, RUN)).toBe(null)
-})
-
 // --- sweepStale ---
 
-const DAY = 24 * 60 * 60 * 1000
+const found = (startMs: number): ProcessLookup => ({ kind: 'found', info: { pid: 1111, ppid: 1, startMs, argv: null } })
 
-test('sweepStale は 7 日より古く heartbeat の無いポインタを削除する', () => {
-  const now = 100 * DAY
-  writePointer(pointer({ claude_pid: 1111, written_at: now - POINTER_MAX_AGE_MS - 1 }))
-  const result = sweepStale(4321, now)
+// PID ごとの照会結果を返し 照会された PID を記録する偽の lookup (表に無い PID は error)
+function fakeLookup(table: Record<number, ProcessLookup>) {
+  const asked: number[] = []
+  const lookup = (pid: number): ProcessLookup => {
+    asked.push(pid)
+    return table[pid] ?? { kind: 'error' }
+  }
+  return { lookup, asked }
+}
+
+test('sweepStale はプロセスが存在しない PID のポインタを消す', () => {
+  writePointer(pointer({ claude_pid: 1111 }))
+  const result = sweepStale(4321, fakeLookup({ 1111: { kind: 'missing' } }).lookup)
   expect(result.removed).toEqual(['1111.json'])
   expect(readPointer(1111)).toBe(null)
 })
 
-test('sweepStale は 7 日より古くても heartbeat が鮮度内のポインタを保持する', () => {
-  const now = 100 * DAY
-  writePointer(pointer({ claude_pid: 1111, written_at: now - POINTER_MAX_AGE_MS - 1 }))
-  writeHeartbeat(1111, RUN, now - 1_000)
-  const result = sweepStale(4321, now)
-  expect(result.removed).toEqual([])
+test('sweepStale は作成時刻が claude_started_at と違う PID のポインタを消す', () => {
+  writePointer(pointer({ claude_pid: 1111 }))
+  const result = sweepStale(4321, fakeLookup({ 1111: found(STARTED + 1) }).lookup)
+  expect(result.removed).toEqual(['1111.json'])
+  expect(readPointer(1111)).toBe(null)
+})
+
+test('sweepStale は作成時刻が claude_started_at と一致する PID のポインタを残す', () => {
+  writePointer(pointer({ claude_pid: 1111 }))
+  const result = sweepStale(4321, fakeLookup({ 1111: found(STARTED) }).lookup)
+  expect(result).toEqual({ removed: [], kept: ['1111.json'] })
   expect(readPointer(1111)).not.toBe(null)
 })
 
-test('sweepStale は 7 日以内のポインタを保持する', () => {
-  const now = 100 * DAY
-  writePointer(pointer({ claude_pid: 1111, written_at: now - POINTER_MAX_AGE_MS + 1 }))
-  expect(sweepStale(4321, now).removed).toEqual([])
+test('sweepStale は claude_started_at を持たない旧形式を作成時刻が written_at より後なら消す', () => {
+  writeLegacyPointer(1111, WRITTEN)
+  const result = sweepStale(4321, fakeLookup({ 1111: found(WRITTEN + 1) }).lookup)
+  expect(result.removed).toEqual(['1111.json'])
+  expect(readPointer(1111)).toBe(null)
+})
+
+test('sweepStale は claude_started_at を持たない旧形式を作成時刻が written_at より前なら残す', () => {
+  writeLegacyPointer(1111, WRITTEN)
+  const result = sweepStale(4321, fakeLookup({ 1111: found(WRITTEN - 1) }).lookup)
+  expect(result).toEqual({ removed: [], kept: ['1111.json'] })
   expect(readPointer(1111)).not.toBe(null)
 })
 
-test('sweepStale は自分の claude_pid のポインタを対象にしない', () => {
-  const now = 100 * DAY
-  writePointer(pointer({ claude_pid: 4321, written_at: now - POINTER_MAX_AGE_MS - 1 }))
-  expect(sweepStale(4321, now).removed).toEqual([])
+test('sweepStale はプロセスの情報を取得できなかった PID のポインタを残す', () => {
+  writePointer(pointer({ claude_pid: 1111 }))
+  const result = sweepStale(4321, fakeLookup({ 1111: { kind: 'error' } }).lookup)
+  expect(result).toEqual({ removed: [], kept: ['1111.json'] })
+  expect(readPointer(1111)).not.toBe(null)
+})
+
+test('sweepStale は自分の claude_pid のポインタを照会せずに残す', () => {
+  writePointer(pointer({ claude_pid: 4321 }))
+  const f = fakeLookup({ 4321: { kind: 'missing' } })
+  const result = sweepStale(4321, f.lookup)
+  expect(result).toEqual({ removed: [], kept: ['4321.json'] })
+  expect(f.asked).toEqual([])
   expect(readPointer(4321)).not.toBe(null)
 })
 
-test('sweepStale は heartbeat を読めないポインタを保持する', () => {
-  const now = 100 * DAY
-  writePointer(pointer({ claude_pid: 1111, written_at: now - POINTER_MAX_AGE_MS - 1 }))
+test('sweepStale は存在するプロセスの解析できないポインタを残す', () => {
   mkdirSync(sessionDir(), { recursive: true })
-  writeFileSync(join(sessionDir(), `1111.${RUN}.heartbeat`), 'broken')
-  const result = sweepStale(4321, now)
-  expect(result.removed).toEqual([])
-  expect(result.kept).toContain('1111.json')
+  writeFileSync(join(sessionDir(), '1111.json'), '{ broken')
+  const result = sweepStale(4321, fakeLookup({ 1111: found(STARTED) }).lookup)
+  expect(result).toEqual({ removed: [], kept: ['1111.json'] })
 })
 
-test('sweepStale は 1 時間より古い heartbeat を削除する', () => {
-  const now = 100 * DAY
-  writeHeartbeat(1111, RUN, now - HEARTBEAT_MAX_AGE_MS - 1)
-  expect(sweepStale(4321, now).removed).toEqual([`1111.${RUN}.heartbeat`])
-  expect(readHeartbeat(1111, RUN)).toBe(null)
-})
-
-test('sweepStale は 1 時間以内の heartbeat を保持する', () => {
-  const now = 100 * DAY
-  writeHeartbeat(1111, RUN, now - HEARTBEAT_MAX_AGE_MS + 1)
-  expect(sweepStale(4321, now).removed).toEqual([])
-  expect(readHeartbeat(1111, RUN)).not.toBe(null)
-})
-
-test('sweepStale は解析できない heartbeat を保持する', () => {
-  const now = 100 * DAY
+test('sweepStale は heartbeat のファイルを消す', () => {
   mkdirSync(sessionDir(), { recursive: true })
-  writeFileSync(join(sessionDir(), `1111.${RUN}.heartbeat`), 'broken')
-  expect(sweepStale(4321, now).removed).toEqual([])
-  expect(existsSync(join(sessionDir(), `1111.${RUN}.heartbeat`))).toBe(true)
+  const name = `1111.${RUN}.heartbeat`
+  writeFileSync(join(sessionDir(), name), JSON.stringify({ run_id: RUN, written_at: WRITTEN }))
+  const result = sweepStale(4321, fakeLookup({}).lookup)
+  expect(result.removed).toEqual([name])
+  expect(existsSync(join(sessionDir(), name))).toBe(false)
 })
 
 test('sweepStale は規約外の名前のファイルを触らない', () => {
-  const now = 100 * DAY
   mkdirSync(sessionDir(), { recursive: true })
   writeFileSync(join(sessionDir(), 'notes.txt'), 'x')
-  expect(sweepStale(4321, now).removed).toEqual([])
+  const f = fakeLookup({})
+  expect(sweepStale(4321, f.lookup)).toEqual({ removed: [], kept: [] })
+  expect(f.asked).toEqual([])
   expect(existsSync(join(sessionDir(), 'notes.txt'))).toBe(true)
 })
 
 test('sweepStale はディレクトリが無くても失敗しない', () => {
-  expect(sweepStale(4321, 100 * DAY)).toEqual({ removed: [], kept: [] })
+  expect(sweepStale(4321, fakeLookup({}).lookup)).toEqual({ removed: [], kept: [] })
+})
+
+test('sweepStale は lookup を省略すると実際のプロセスを照会する', () => {
+  const self = lookupProcess(process.pid)
+  if (self.kind !== 'found') throw new Error('lookupProcess(process.pid) must succeed')
+  const otherSelf = process.pid + 1
+  writePointer(pointer({ claude_pid: process.pid, claude_started_at: self.info.startMs }))
+  expect(sweepStale(otherSelf).kept).toEqual([`${process.pid}.json`])
+
+  writePointer(pointer({ claude_pid: process.pid, claude_started_at: self.info.startMs - 1 }))
+  expect(sweepStale(otherSelf).removed).toEqual([`${process.pid}.json`])
 })

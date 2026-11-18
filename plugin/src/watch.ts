@@ -1,10 +1,4 @@
 import { thinkingGist, toolSummary, truncate } from './summarize'
-import { ownerName, debugLog } from './notify'
-import { createAccessReader } from './access'
-import { HEARTBEAT_TTL_MS, isFresh, readHeartbeat, readPointer } from './activation'
-import { createDiscordClient } from './discord-api'
-import { isHex32, isPid, isSessionId } from './ids'
-import { createProgressSender, type SendOutcome } from './progress-sender'
 import { statSync, openSync, readSync, closeSync, existsSync } from 'fs'
 import { StringDecoder } from 'string_decoder'
 
@@ -83,195 +77,41 @@ export function splitLines(carry: string, chunk: string): { lines: string[]; car
   return { lines: parts, carry: newCarry }
 }
 
-// 起動引数 ---
-// watcher は activation 単位で起動されるため 5 つの識別子をすべて必須にする
+// transcript の増分の読み取り ---
 
-export type WatchArgs = {
-  transcriptPath: string
-  sessionId: string
-  claudePid: number
-  runId: string
-  activationId: string
-}
+export type TailReader = { readNewLines(): string[] }
 
-export function parseWatchArgs(argv: string[]): WatchArgs | null {
-  const [transcriptPath, sessionId, claudePid, runId, activationId] = argv
-  if (!transcriptPath) return null
-  if (!isSessionId(sessionId)) return null
-  if (!isPid(claudePid)) return null
-  if (!isHex32(runId) || !isHex32(activationId)) return null
-  return { transcriptPath, sessionId, claudePid: Number(claudePid), runId, activationId }
-}
-
-// watcher 本体 ---
-// 状態は WAIT_HEARTBEAT -> ACTIVE -> TERMINATED の 3 つである
-// 起動時に読み取り位置を EOF で確定し 待機中は transcript を読まず送信もしない
-// ACTIVE では毎秒 heartbeat とポインタを確認し 満たされなくなったら終了する
-
-// 最初の有効な heartbeat を待つ上限 (hook と proxy の初期化の順序に依存しないため)
-const WAIT_HEARTBEAT_MAX_MS = 30_000
-// transcript のポーリング間隔
-const POLL_MS = 250
-// activation の確認間隔
-const TICK_MS = 1_000
-
-export type WatcherState = 'WAIT_HEARTBEAT' | 'ACTIVE' | 'TERMINATED'
-
-export type Watcher = {
-  state(): WatcherState
-  tick(): void
-  poll(): Promise<void>
-}
-
-export function createWatcher(deps: {
-  transcriptPath: string
-  claudePid: number
-  runId: string
-  activationId: string
-  send: (text: string) => Promise<SendOutcome>
-  now?: () => number
-  log?: (msg: string) => void
-}): Watcher {
-  const now = deps.now ?? Date.now
-  const log = deps.log ?? ((): void => {})
-  let waitStart = now()
-
-  let state: WatcherState = 'WAIT_HEARTBEAT'
-  // 起動時点の EOF を読み取り位置にする (待機中の追記は ACTIVE 移行後に順番に処理される)
-  let offset = existsSync(deps.transcriptPath) ? statSync(deps.transcriptPath).size : 0
+// 作成時点の末尾 (ファイルが無ければ先頭) から 追記された完結した行を返す
+// ファイルが縮んだら truncate とみなし 持ち越した行の断片と decoder の部分バイトを捨てて先頭から読み直す
+export function createTailReader(path: string): TailReader {
+  let offset = existsSync(path) ? statSync(path).size : 0
   let carry = ''
   let decoder = new StringDecoder('utf8')
-  let polling = false
-
-  const heartbeatHolds = (): boolean => {
-    const beat = readHeartbeat(deps.claudePid, deps.runId)
-    return beat !== null && isFresh(beat.written_at, HEARTBEAT_TTL_MS, now())
-  }
-
-  const pointerHolds = (): boolean =>
-    readPointer(deps.claudePid)?.activation_id === deps.activationId
-
-  const activationHolds = (): boolean => heartbeatHolds() && pointerHolds()
-
-  const terminate = (reason: string): void => {
-    state = 'TERMINATED'
-    log(`[watch] terminated: ${reason}`)
-  }
-
-  // transcript の増分を読む
-  // ローテーションや truncate を検出したら読み取り状態と decoder の部分バイトを破棄する
-  const readNewLines = (): string[] => {
-    if (!existsSync(deps.transcriptPath)) return []
-    const size = statSync(deps.transcriptPath).size
-    if (size < offset) {
-      offset = 0
-      carry = ''
-      decoder = new StringDecoder('utf8')
-    }
-    if (size === offset) return []
-    const fd = openSync(deps.transcriptPath, 'r')
-    let chunk = ''
-    try {
-      // readSync は要求より少なく読むことがある (同時更新中の transcript との競合)
-      const buf = Buffer.alloc(size - offset)
-      const bytesRead = readSync(fd, buf, 0, buf.length, offset)
-      offset += bytesRead
-      chunk = decoder.write(buf.subarray(0, bytesRead))
-    } finally {
-      closeSync(fd)
-    }
-    const result = splitLines(carry, chunk)
-    carry = result.carry
-    return result.lines
-  }
 
   return {
-    state: () => state,
-
-    tick(): void {
-      if (state === 'TERMINATED') return
-      if (state === 'WAIT_HEARTBEAT') {
-        if (heartbeatHolds()) {
-          state = 'ACTIVE'
-          return
-        }
-        if (now() - waitStart > WAIT_HEARTBEAT_MAX_MS) terminate('heartbeat not observed')
-        return
+    readNewLines(): string[] {
+      if (!existsSync(path)) return []
+      const size = statSync(path).size
+      if (size < offset) {
+        offset = 0
+        carry = ''
+        decoder = new StringDecoder('utf8')
       }
-      if (activationHolds()) return
-      // heartbeat が失効しただけなら待機へ戻す
-      // サスペンドからの復帰直後と MCP だけの再起動では proxy がまだ書き直していない
-      // どちらも tick より書き直しが遅れるだけなので ここで終了させると同じ activation では二度と再開しない
-      // ポインタが別の activation を指していたら 待たずに終了する
-      if (pointerHolds()) {
-        state = 'WAIT_HEARTBEAT'
-        waitStart = now()
-        return
-      }
-      terminate('activation is no longer current')
-    },
-
-    async poll(): Promise<void> {
-      if (state !== 'ACTIVE' || polling) return
-      // heartbeat が失効している間は transcript を読まない
-      // 読み取り位置だけ進めても 送信側が同じ理由で諦めるため その分の進捗を取り戻せない
-      // 読まずに待てば proxy が書き直した後の周期でまとめて送れる
-      if (!heartbeatHolds()) return
-      polling = true
+      if (size === offset) return []
+      const fd = openSync(path, 'r')
+      let chunk = ''
       try {
-        const messages: string[] = []
-        for (const line of readNewLines()) {
-          for (const msg of extractMessages(line)) messages.push(msg)
-        }
-        if (messages.length === 0) return
-        debugLog(`poll: ${messages.length} msgs`)
-        for (const c of packMessages(messages)) {
-          const outcome = await deps.send(c)
-          if (outcome === 'terminated') {
-            terminate('sender observed a different activation')
-            return
-          }
-        }
-      } catch (e) {
-        // 読み取りの失敗ではセッションを止めない
-        log(`[watch] ${e}`)
+        // readSync は要求より少なく読むことがある (同時更新中の transcript との競合)
+        const buf = Buffer.alloc(size - offset)
+        const bytesRead = readSync(fd, buf, 0, buf.length, offset)
+        offset += bytesRead
+        chunk = decoder.write(buf.subarray(0, bytesRead))
       } finally {
-        polling = false
+        closeSync(fd)
       }
+      const result = splitLines(carry, chunk)
+      carry = result.carry
+      return result.lines
     },
   }
-}
-
-// このファイルが直接実行された場合のみ常駐ループを起動する
-// テストからインポートされた場合は実行しない
-if (import.meta.main) {
-  const args = parseWatchArgs(process.argv.slice(2))
-  const owner = ownerName()
-  // 引数の形式が不正 または担当なしなら何もせず終了する
-  if (!args || !owner) process.exit(0)
-
-  const sender = createProgressSender({
-    api: createDiscordClient(),
-    access: createAccessReader(),
-    owner,
-    claudePid: args.claudePid,
-    runId: args.runId,
-    activationId: args.activationId,
-    log: debugLog,
-  })
-  const watcher = createWatcher({ ...args, send: sender.send, log: debugLog })
-
-  const timers: Array<ReturnType<typeof setInterval>> = []
-  const stopIfTerminated = (): void => {
-    if (watcher.state() !== 'TERMINATED') return
-    for (const t of timers) clearInterval(t)
-    process.exit(0)
-  }
-  timers.push(setInterval(() => {
-    watcher.tick()
-    stopIfTerminated()
-  }, TICK_MS))
-  timers.push(setInterval(() => {
-    void watcher.poll().then(stopIfTerminated)
-  }, POLL_MS))
 }

@@ -85,6 +85,20 @@ export function modelDisplayName(modelId: string): string {
   return `${family} ${m[3] ? `${m[2]}.${m[3]}` : m[2]}`
 }
 
+// footer を末尾チャンクへ結合する
+// 改行 1 つを挟んで収まるなら結合し 収まらなければ独立したチャンクとして足す
+export function attachFooter(chunks: string[], footer: string, limit: number): string[] {
+  if (!footer) return chunks
+  const out = [...chunks]
+  const last = out.length > 0 ? out[out.length - 1] : ''
+  if (out.length > 0 && last.length + 1 + footer.length <= limit) {
+    out[out.length - 1] = `${last}\n${footer}`
+    return out
+  }
+  out.push(footer)
+  return out
+}
+
 // footer を組み立てる
 // 全要素が欠けたら空文字を返し 呼び出し側が付与をスキップする
 export function buildFooter(input: {

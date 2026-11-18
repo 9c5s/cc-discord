@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import {
+  attachFooter,
   buildFooter,
   modelDisplayName,
   readLastAssistantEntry,
@@ -183,4 +184,22 @@ test('buildFooter は使用量が無く transcript も無ければ空文字を�
     ownerDir: null,
     usage: { weekly: null, session: null, modelScoped: [] },
   })).toBe('')
+})
+
+// --- attachFooter ---
+
+test('attachFooter は末尾チャンクに収まる footer を結合する', () => {
+  expect(attachFooter(['abc'], 'F', 10)).toEqual(['abc\nF'])
+})
+
+test('attachFooter は収まらない footer を独立したチャンクにする', () => {
+  expect(attachFooter(['abcdefghij'], 'F', 10)).toEqual(['abcdefghij', 'F'])
+})
+
+test('attachFooter は footer が無ければ元のチャンクを返す', () => {
+  expect(attachFooter(['abc'], '', 10)).toEqual(['abc'])
+})
+
+test('attachFooter は末尾チャンクだけに結合する', () => {
+  expect(attachFooter(['abcd', 'ef'], 'F', 10)).toEqual(['abcd', 'ef\nF'])
 })

@@ -1,5 +1,19 @@
-import { test, expect } from 'bun:test'
-import { extractMessages, packMessages, splitLines } from '../src/watch'
+import { test, expect, afterEach } from 'bun:test'
+import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
+import { createTailReader, extractMessages, packMessages, splitLines } from '../src/watch'
+
+const testTmpDir = join(tmpdir(), `discord-watch-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`)
+
+afterEach(() => {
+  rmSync(testTmpDir, { recursive: true, force: true })
+})
+
+function transcriptPath(): string {
+  mkdirSync(testTmpDir, { recursive: true })
+  return join(testTmpDir, 'transcript.jsonl')
+}
 
 test('thinking ブロックから要点を抽出する', () => {
   const line = '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"まず確認する。次に実装する。"}]}}'
@@ -112,4 +126,65 @@ test('splitLines: 空チャンクは carry をそのまま返す', () => {
 
 test('splitLines: carry と chunk を結合して分割する', () => {
   expect(splitLines('hel', 'lo\nworld')).toEqual({ lines: ['hello'], carry: 'world' })
+})
+
+// --- createTailReader ---
+
+test('createTailReader は作成時点の末尾から読む', () => {
+  const p = transcriptPath()
+  writeFileSync(p, 'old1\nold2\n')
+  const reader = createTailReader(p)
+  expect(reader.readNewLines()).toEqual([])
+  appendFileSync(p, 'new1\nnew2\n')
+  expect(reader.readNewLines()).toEqual(['new1', 'new2'])
+  expect(reader.readNewLines()).toEqual([])
+})
+
+test('createTailReader はファイルが無ければ作られた後に先頭から読む', () => {
+  const p = transcriptPath()
+  const reader = createTailReader(p)
+  expect(reader.readNewLines()).toEqual([])
+  writeFileSync(p, 'first\nsecond\n')
+  expect(reader.readNewLines()).toEqual(['first', 'second'])
+})
+
+test('createTailReader はファイルが縮んだら先頭から読み直す', () => {
+  const p = transcriptPath()
+  writeFileSync(p, 'a-long-line\nanother-long-line\n')
+  const reader = createTailReader(p)
+  writeFileSync(p, 'short\n')
+  expect(reader.readNewLines()).toEqual(['short'])
+})
+
+test('createTailReader は縮んだときに持ち越していた行の断片を捨てる', () => {
+  const p = transcriptPath()
+  writeFileSync(p, 'a-long-line\n')
+  const reader = createTailReader(p)
+  appendFileSync(p, 'partial')
+  expect(reader.readNewLines()).toEqual([])
+  writeFileSync(p, 'x\n')
+  expect(reader.readNewLines()).toEqual(['x'])
+})
+
+test('createTailReader は行の途中で切れた分を次回へ持ち越す', () => {
+  const p = transcriptPath()
+  writeFileSync(p, '')
+  const reader = createTailReader(p)
+  appendFileSync(p, '{"type":')
+  expect(reader.readNewLines()).toEqual([])
+  appendFileSync(p, '"assistant"}\nnext')
+  expect(reader.readNewLines()).toEqual(['{"type":"assistant"}'])
+  appendFileSync(p, '\n')
+  expect(reader.readNewLines()).toEqual(['next'])
+})
+
+test('createTailReader は途中で切れたマルチバイト文字を次回の読み取りでつなぐ', () => {
+  const p = transcriptPath()
+  writeFileSync(p, '')
+  const reader = createTailReader(p)
+  const bytes = Buffer.from('あ\n', 'utf8')
+  appendFileSync(p, bytes.subarray(0, 2))
+  expect(reader.readNewLines()).toEqual([])
+  appendFileSync(p, bytes.subarray(2))
+  expect(reader.readNewLines()).toEqual(['あ'])
 })

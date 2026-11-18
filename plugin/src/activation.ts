@@ -1,25 +1,21 @@
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { isHex32, isPid, isSessionId, resolveInDir } from './ids'
+import { lookupProcess, type ProcessLookup } from './process-tree'
 import { stateDir } from './state-dir'
 
-// 現行 activation のポインタと heartbeat ---
+// 現行 activation のポインタ ---
 // activation とは 1 回の SessionStart (startup / resume / clear / fork) で始まる期間である
 // compaction は同じセッションの継続なので activation を変えない
-// hook がポインタを書き proxy が heartbeat を書き watcher が両方を読んで自律終了を決める
-
-// heartbeat の鮮度 (proxy は 5 秒ごとに書く)
-export const HEARTBEAT_TTL_MS = 15_000
-// 掃除の対象になる年齢 (ポインタ 7 日 heartbeat 1 時間)
-export const POINTER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
-export const HEARTBEAT_MAX_AGE_MS = 60 * 60 * 1000
+// hook がポインタを書き server が読む
 
 export type ActivationSource = 'startup' | 'resume' | 'clear' | 'compact' | 'fork'
 const SOURCES: ActivationSource[] = ['startup', 'resume', 'clear', 'compact', 'fork']
 
 export type Pointer = {
   claude_pid: number
-  run_id: string | null
+  // Claude Code のプロセスの作成時刻 (epoch ミリ秒)
+  claude_started_at?: number
   session_id: string
   activation_id: string
   transcript_path: string
@@ -28,18 +24,8 @@ export type Pointer = {
   written_at: number
 }
 
-export type Heartbeat = { run_id: string; written_at: number }
-
 export function sessionDir(): string {
   return join(stateDir(), 'session', 'by-pid')
-}
-
-// 鮮度判定 ---
-// 未来の時刻 数値でない値 有限でない値はすべて失効として扱う
-export function isFresh(writtenAt: unknown, ttlMs: number, now: number = Date.now()): boolean {
-  if (typeof writtenAt !== 'number' || !Number.isFinite(writtenAt)) return false
-  const age = now - writtenAt
-  return age >= 0 && age <= ttlMs
 }
 
 // PID からポインタのパスを解決する
@@ -47,14 +33,6 @@ export function isFresh(writtenAt: unknown, ttlMs: number, now: number = Date.no
 function pointerPath(claudePid: number): string | null {
   if (!Number.isInteger(claudePid) || !isPid(String(claudePid))) return null
   return resolveInDir(sessionDir(), `${claudePid}.json`)
-}
-
-// PID と run_id から heartbeat のパスを解決する
-// パスに run_id を含めるため PID を再利用した別 run と同じファイルを操作しない
-function heartbeatPath(claudePid: number, runId: string): string | null {
-  if (!Number.isInteger(claudePid) || !isPid(String(claudePid))) return null
-  if (!isHex32(runId)) return null
-  return resolveInDir(sessionDir(), `${claudePid}.${runId}.heartbeat`)
 }
 
 // 一時ファイルへ書いてから rename する
@@ -73,6 +51,7 @@ function writeAtomic(path: string, content: string): boolean {
 
 // ポインタの構文検証
 // ファイル名の PID と内容の PID の一致まで確認する
+// run_id があっても取り込まない
 function parsePointer(raw: string, claudePid: number): Pointer | null {
   let v: Record<string, unknown>
   try {
@@ -83,19 +62,20 @@ function parsePointer(raw: string, claudePid: number): Pointer | null {
   if (v.claude_pid !== claudePid) return null
   if (!isSessionId(v.session_id)) return null
   if (!isHex32(v.activation_id)) return null
-  if (v.run_id !== null && !isHex32(v.run_id)) return null
   if (typeof v.transcript_path !== 'string' || !v.transcript_path) return null
   if (!SOURCES.includes(v.source as ActivationSource)) return null
   if (typeof v.written_at !== 'number' || !Number.isFinite(v.written_at)) return null
+  const hasStartedAt = 'claude_started_at' in v
+  if (hasStartedAt && (typeof v.claude_started_at !== 'number' || !Number.isFinite(v.claude_started_at))) return null
   const p: Pointer = {
     claude_pid: claudePid,
-    run_id: v.run_id as string | null,
     session_id: v.session_id,
     activation_id: v.activation_id,
     transcript_path: v.transcript_path,
     source: v.source as ActivationSource,
     written_at: v.written_at,
   }
+  if (hasStartedAt) p.claude_started_at = v.claude_started_at as number
   if (typeof v.model === 'string') p.model = v.model
   return p
 }
@@ -129,78 +109,6 @@ export function deletePointer(claudePid: number): boolean {
   }
 }
 
-export function writeHeartbeat(claudePid: number, runId: string, now: number = Date.now()): boolean {
-  const path = heartbeatPath(claudePid, runId)
-  if (!path) return false
-  return writeAtomic(path, JSON.stringify({ run_id: runId, written_at: now }))
-}
-
-// heartbeat を読む
-// 内容の run_id が要求と違えば null を返す (PID 再利用した別 run の値を採用しない)
-export function readHeartbeat(claudePid: number, runId: string): Heartbeat | null {
-  const path = heartbeatPath(claudePid, runId)
-  if (!path) return null
-  let v: Record<string, unknown>
-  try {
-    v = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
-  } catch {
-    return null
-  }
-  if (v.run_id !== runId) return null
-  if (typeof v.written_at !== 'number' || !Number.isFinite(v.written_at)) return null
-  return { run_id: runId, written_at: v.written_at }
-}
-
-// heartbeat を削除する (compare-and-delete)
-// 内容の run_id が自分のものであることを確認してから消す
-// 削除できなくても TTL で失効する
-export function deleteHeartbeat(claudePid: number, runId: string): boolean {
-  const path = heartbeatPath(claudePid, runId)
-  if (!path) return false
-  if (!readHeartbeat(claudePid, runId)) return false
-  try {
-    rmSync(path, { force: true })
-    return true
-  } catch {
-    return false
-  }
-}
-
-// heartbeat の状態を 4 つに分ける
-// 掃除では missing と expired だけを削除の根拠にし error では保持する
-// (権限や I/O や解析の失敗を生存の否定と取り違えないため)
-export type HeartbeatState = { state: 'missing' | 'fresh' | 'expired' | 'error' }
-
-export function inspectHeartbeat(claudePid: number, runId: string, now: number = Date.now()): HeartbeatState {
-  const path = heartbeatPath(claudePid, runId)
-  if (!path) return { state: 'error' }
-  let raw: string
-  try {
-    raw = readFileSync(path, 'utf8')
-  } catch (e) {
-    return { state: (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'error' }
-  }
-  let v: Record<string, unknown>
-  try {
-    v = JSON.parse(raw) as Record<string, unknown>
-  } catch {
-    return { state: 'error' }
-  }
-  if (v.run_id !== runId) return { state: 'error' }
-  if (typeof v.written_at !== 'number' || !Number.isFinite(v.written_at)) return { state: 'error' }
-  return { state: isFresh(v.written_at, HEARTBEAT_TTL_MS, now) ? 'fresh' : 'expired' }
-}
-
-// 現行 activation を解決する ---
-// run_id が一致するポインタだけを採用し PID の再利用や別起動の取り違えを防ぐ
-// run_id を持たないプロセスは進捗転送の対象外なので常に null になる
-export function currentActivation(claudePid: number, runId: string | null): Pointer | null {
-  if (!runId) return null
-  const p = readPointer(claudePid)
-  if (!p || p.run_id !== runId) return null
-  return p
-}
-
 function removeFile(name: string): boolean {
   const path = resolveInDir(sessionDir(), name)
   if (!path) return false
@@ -212,11 +120,26 @@ function removeFile(name: string): boolean {
   }
 }
 
+// ポインタを書いたプロセスが終了したか PID が再利用されたかを判定する
+// claude_started_at を持たないポインタは 書かれた後に起動したプロセスを PID の再利用とみなす
+function isAbandoned(pid: number, lookup: (pid: number) => ProcessLookup): boolean {
+  const r = lookup(pid)
+  if (r.kind === 'missing') return true
+  if (r.kind === 'error') return false
+  const p = readPointer(pid)
+  if (!p) return false
+  if (p.claude_started_at !== undefined) return r.info.startMs !== p.claude_started_at
+  return r.info.startMs > p.written_at
+}
+
 // 古いポインタと heartbeat の掃除 ---
-// プロセスの照会はしない (PID の再利用や照会失敗の扱いを持ち込まない)
-// ポインタは 自分の PID 以外で 7 日より古く heartbeat が不在または失効と確認できたものだけを消す
-// heartbeat は 1 時間より古いものを消す
-export function sweepStale(selfPid: number, now: number = Date.now()): { removed: string[]; kept: string[] } {
+// ポインタは 自分の PID 以外で プロセスが存在しないか PID が再利用されたと判定できたものだけを消す
+// 照会に失敗したものは プロセスが無いと判定できないため残す
+// heartbeat はもう読まないので すべて消す
+export function sweepStale(
+  selfPid: number,
+  lookup: (pid: number) => ProcessLookup = lookupProcess,
+): { removed: string[]; kept: string[] } {
   let names: string[]
   try {
     names = readdirSync(sessionDir())
@@ -232,28 +155,15 @@ export function sweepStale(selfPid: number, now: number = Date.now()): { removed
   }
 
   for (const name of names) {
-    const hb = /^(\d{1,10})\.([0-9a-f]{32})\.heartbeat$/.exec(name)
-    if (hb) {
-      const beat = readHeartbeat(Number(hb[1]), hb[2])
-      if (beat && now - beat.written_at > HEARTBEAT_MAX_AGE_MS) record(name, removeFile(name))
-      else kept.push(name)
+    if (/^\d{1,10}\.[0-9a-f]{32}\.heartbeat$/.test(name)) {
+      record(name, removeFile(name))
       continue
     }
 
     const pt = /^(\d{1,10})\.json$/.exec(name)
     if (!pt) continue
     const pid = Number(pt[1])
-    if (pid === selfPid) {
-      kept.push(name)
-      continue
-    }
-    const p = readPointer(pid)
-    if (!p || now - p.written_at <= POINTER_MAX_AGE_MS) {
-      kept.push(name)
-      continue
-    }
-    const state = p.run_id ? inspectHeartbeat(pid, p.run_id, now).state : 'missing'
-    if (state === 'missing' || state === 'expired') record(name, removeFile(name))
+    if (pid !== selfPid && isAbandoned(pid, lookup)) record(name, removeFile(name))
     else kept.push(name)
   }
 

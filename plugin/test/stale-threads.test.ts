@@ -1,74 +1,57 @@
-import { test, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test'
-import { mkdirSync, rmSync } from 'fs'
-import { join } from 'path'
-import { tmpdir } from 'os'
-import { archiveStaleThreads, isStaleThread } from '../src/stale-threads'
-import * as progressTarget from '../src/progress-target'
-import { readTarget, writeTarget, type ProgressTarget } from '../src/progress-target'
-import type { ApiResult, DiscordClient } from '../src/discord-api'
+import { test, expect } from 'bun:test'
+import { STALE_MS, archiveStaleThreads, isStaleThread, type ThreadView } from '../src/stale-threads'
 
-const testTmpDir = join(tmpdir(), `discord-stale-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`)
-let savedStateDir: string | undefined
-
-beforeEach(() => {
-  savedStateDir = process.env.DISCORD_STATE_DIR
-  process.env.DISCORD_STATE_DIR = join(testTmpDir, 'state')
-  mkdirSync(process.env.DISCORD_STATE_DIR, { recursive: true })
-})
-
-afterEach(() => {
-  mock.restore()
-  rmSync(testTmpDir, { recursive: true, force: true })
-  if (savedStateDir === undefined) delete process.env.DISCORD_STATE_DIR
-  else process.env.DISCORD_STATE_DIR = savedStateDir
-})
-
-const OWNER = 'proj'
 const CH = '33333333333333333'
 const BOT = '55555555555555555'
-const GUILD = '11111111111111111'
-const ACT = 'b'.repeat(32)
-const OTHER_ACT = 'c'.repeat(32)
-const RUN = 'a'.repeat(32)
-const SESSION = '57db69e6-bf68-407b-8958-680297cb447f'
-const MSG = '99999999999999999'
+const THREAD = '44444444444444444'
 
-// Discord epoch から 12 時間より前を指す snowflake を作る
 const DISCORD_EPOCH = 1_420_070_400_000
 function snowflakeAt(ms: number): string {
   return String((BigInt(ms - DISCORD_EPOCH) << 22n) | 1n)
 }
 
+const HOUR = 60 * 60 * 1000
 const NOW = 1_800_000_000_000
-const OLD = NOW - 13 * 60 * 60 * 1000
-const RECENT = NOW - 1 * 60 * 60 * 1000
+const OLD = NOW - 13 * HOUR
+const ALMOST = NOW - (13 * HOUR - 60_000)
 
-function thread(over: Record<string, unknown> = {}): Record<string, unknown> {
+function thread(over: Partial<ThreadView> = {}): ThreadView {
   return {
-    id: '44444444444444444',
-    parent_id: CH,
-    owner_id: BOT,
+    id: THREAD,
+    parentId: CH,
+    ownerId: BOT,
     name: '[08/23 11:00] ping',
-    last_message_id: snowflakeAt(OLD),
-    thread_metadata: { auto_archive_duration: 60 },
+    autoArchiveDuration: 60,
+    lastMessageId: snowflakeAt(OLD),
+    createdTimestamp: null,
     ...over,
   }
 }
 
 // --- isStaleThread ---
 
-const opts = { parentId: CH, botId: BOT, now: NOW }
+const opts = { parentId: CH, botId: BOT, currentTargetId: null, now: NOW }
 
-test('isStaleThread は条件をすべて満たすスレッドを対象にする', () => {
+test('STALE_MS は 13 時間である', () => {
+  expect(STALE_MS).toBe(13 * HOUR)
+})
+
+test('isStaleThread は最終メッセージから 13 時間たったスレッドを対象にする', () => {
   expect(isStaleThread(thread(), opts)).toBe(true)
 })
 
+test('isStaleThread は最終メッセージから 12 時間 59 分のスレッドを対象にしない', () => {
+  expect(isStaleThread(thread({ lastMessageId: snowflakeAt(ALMOST) }), opts)).toBe(false)
+})
+
 test('isStaleThread は担当チャンネル以外の子スレッドを除く', () => {
-  expect(isStaleThread(thread({ parent_id: '66666666666666666' }), opts)).toBe(false)
+  expect(isStaleThread(thread({ parentId: '66666666666666666' }), opts)).toBe(false)
+  expect(isStaleThread(thread({ parentId: null }), opts)).toBe(false)
 })
 
 test('isStaleThread は bot 以外が作ったスレッドを除く', () => {
-  expect(isStaleThread(thread({ owner_id: '77777777777777777' }), opts)).toBe(false)
+  expect(isStaleThread(thread({ ownerId: '77777777777777777' }), opts)).toBe(false)
+  expect(isStaleThread(thread({ ownerId: null }), opts)).toBe(false)
 })
 
 test('isStaleThread は名前の規約に合わないスレッドを除く', () => {
@@ -76,106 +59,67 @@ test('isStaleThread は名前の規約に合わないスレッドを除く', () 
 })
 
 test('isStaleThread は自動 archive 時間が 60 でないスレッドを除く', () => {
-  expect(isStaleThread(thread({ thread_metadata: { auto_archive_duration: 1440 } }), opts)).toBe(false)
+  expect(isStaleThread(thread({ autoArchiveDuration: 1440 }), opts)).toBe(false)
+  expect(isStaleThread(thread({ autoArchiveDuration: null }), opts)).toBe(false)
 })
 
-test('isStaleThread は 12 時間以内に動きのあるスレッドを除く', () => {
-  expect(isStaleThread(thread({ last_message_id: snowflakeAt(RECENT) }), opts)).toBe(false)
+test('isStaleThread は現在の宛先のスレッドを除く', () => {
+  expect(isStaleThread(thread(), { ...opts, currentTargetId: THREAD })).toBe(false)
+  expect(isStaleThread(thread(), { ...opts, currentTargetId: '44444444444444445' })).toBe(true)
 })
 
 test('isStaleThread は最終メッセージが無ければ作成時刻で判定する', () => {
-  const created = new Date(OLD).toISOString()
-  expect(isStaleThread(thread({ last_message_id: null, thread_metadata: { auto_archive_duration: 60, create_timestamp: created } }), opts)).toBe(true)
+  expect(isStaleThread(thread({ lastMessageId: null, createdTimestamp: OLD }), opts)).toBe(true)
+  expect(isStaleThread(thread({ lastMessageId: null, createdTimestamp: ALMOST }), opts)).toBe(false)
+})
+
+test('isStaleThread は最終メッセージも作成時刻も無ければスレッド id の生成時刻で判定する', () => {
+  expect(isStaleThread(thread({ id: snowflakeAt(OLD), lastMessageId: null }), opts)).toBe(true)
+  expect(isStaleThread(thread({ id: snowflakeAt(ALMOST), lastMessageId: null }), opts)).toBe(false)
 })
 
 test('isStaleThread は時刻を判定できないスレッドを除く', () => {
-  expect(isStaleThread(thread({ id: 'x', last_message_id: null, thread_metadata: { auto_archive_duration: 60 } }), opts)).toBe(false)
+  expect(isStaleThread(thread({ id: 'x', lastMessageId: null }), opts)).toBe(false)
 })
 
 // --- archiveStaleThreads ---
 
-function target(over: Partial<ProgressTarget> = {}): ProgressTarget {
+function fakeOps(threads: ThreadView[], archive: (id: string) => Promise<boolean> = async () => true) {
+  const archived: string[] = []
   return {
-    id: '44444444444444444',
-    parent: CH,
-    kind: 'guild',
-    session_id: SESSION,
-    run_id: RUN,
-    activation_id: ACT,
-    message_id: MSG,
-    written_at: NOW,
-    ...over,
+    archived,
+    ops: {
+      listActiveThreads: async () => threads,
+      archive: async (id: string) => {
+        archived.push(id)
+        return archive(id)
+      },
+    },
   }
 }
 
-function fakeApi(threads: Array<Record<string, unknown>>, over: Record<string, unknown> = {}) {
-  const archived: string[] = []
-  const api = {
-    getActiveThreads: async (): Promise<ApiResult<Array<Record<string, unknown>>>> => ({ ok: true, value: threads }),
-    archiveThread: async (id: string) => {
-      archived.push(id)
-      return { ok: true as const, value: null }
-    },
-    ...over,
-  } as unknown as DiscordClient
-  return { api, archived }
-}
+const args = { parentId: CH, botId: BOT, currentTargetId: null, now: NOW }
 
-const args = { owner: OWNER, guildId: GUILD, ownerChannelId: CH, botId: BOT, now: NOW }
-
-test('archiveStaleThreads は対象スレッドを archive する', async () => {
-  const a = fakeApi([thread(), thread({ id: '44444444444444445', last_message_id: snowflakeAt(RECENT) })])
-  expect(await archiveStaleThreads(a.api, args)).toEqual(['44444444444444444'])
-  expect(a.archived).toEqual(['44444444444444444'])
+test('archiveStaleThreads は対象のスレッドだけを archive する', async () => {
+  const o = fakeOps([thread(), thread({ id: '44444444444444445', lastMessageId: snowflakeAt(ALMOST) })])
+  expect(await archiveStaleThreads(o.ops, args)).toEqual([THREAD])
+  expect(o.archived).toEqual([THREAD])
 })
 
-test('archiveStaleThreads は有効な宛先が残っているスレッドを閉じない', async () => {
-  writeTarget(OWNER, target())
-  const a = fakeApi([thread()])
-  expect(await archiveStaleThreads(a.api, args)).toEqual([])
-  expect(a.archived).toEqual([])
-  expect(readTarget(OWNER, ACT)).not.toBe(null)
+test('archiveStaleThreads は現在の宛先のスレッドを閉じない', async () => {
+  const o = fakeOps([thread()])
+  expect(await archiveStaleThreads(o.ops, { ...args, currentTargetId: THREAD })).toEqual([])
+  expect(o.archived).toEqual([])
 })
 
-test('archiveStaleThreads は対象スレッドを指す失効した宛先だけを消す', async () => {
-  writeTarget(OWNER, target({ written_at: NOW - 13 * 60 * 60 * 1000 }))
-  writeTarget(OWNER, target({ activation_id: OTHER_ACT, id: '44444444444444449' }))
-  const a = fakeApi([thread()])
-  await archiveStaleThreads(a.api, args)
-  expect(readTarget(OWNER, ACT)).toBe(null)
-  expect(readTarget(OWNER, OTHER_ACT)).not.toBe(null)
-  expect(a.archived).toEqual(['44444444444444444'])
+test('archiveStaleThreads は archive が false を返したスレッドを結果に含めない', async () => {
+  const other = '44444444444444446'
+  const o = fakeOps([thread(), thread({ id: other })], async (id) => id === other)
+  expect(await archiveStaleThreads(o.ops, args)).toEqual([other])
+  expect(o.archived).toEqual([THREAD, other])
 })
 
-test('archiveStaleThreads は期限切れの宛先も id が一致すれば消す', async () => {
-  writeTarget(OWNER, target({ written_at: NOW - 13 * 60 * 60 * 1000 }))
-  const a = fakeApi([thread()])
-  await archiveStaleThreads(a.api, args)
-  expect(readTarget(OWNER, ACT)).toBe(null)
-})
-
-test('archiveStaleThreads は宛先を消せなかったスレッドを閉じない', async () => {
-  // 宛先が残ったまま閉じると watcher の投稿でスレッドが開き直される
-  writeTarget(OWNER, target({ written_at: NOW - 13 * 60 * 60 * 1000 }))
-  spyOn(progressTarget, 'deleteTarget').mockReturnValue(false)
-  const a = fakeApi([thread()])
-  expect(await archiveStaleThreads(a.api, args)).toEqual([])
-  expect(a.archived).toEqual([])
-})
-
-test('archiveStaleThreads は取得に失敗したら何もしない', async () => {
-  const a = fakeApi([], { getActiveThreads: async () => ({ ok: false as const, error: 'http 403' }) })
-  expect(await archiveStaleThreads(a.api, args)).toEqual([])
-  expect(a.archived).toEqual([])
-})
-
-test('archiveStaleThreads は担当名が不正なら何もしない', async () => {
-  const a = fakeApi([thread()])
-  expect(await archiveStaleThreads(a.api, { ...args, owner: '../evil' })).toEqual([])
-  expect(a.archived).toEqual([])
-})
-
-test('archiveStaleThreads は archive に失敗したスレッドを結果に含めない', async () => {
-  const a = fakeApi([thread()], { archiveThread: async () => ({ ok: false as const, error: 'http 403' }) })
-  expect(await archiveStaleThreads(a.api, args)).toEqual([])
+test('archiveStaleThreads は now を省略すると現在時刻で判定する', async () => {
+  const o = fakeOps([thread({ lastMessageId: snowflakeAt(Date.now() - 14 * HOUR) })])
+  expect(await archiveStaleThreads(o.ops, { parentId: CH, botId: BOT, currentTargetId: null })).toEqual([THREAD])
 })

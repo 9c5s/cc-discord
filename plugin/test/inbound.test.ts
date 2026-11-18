@@ -2,9 +2,15 @@ import { test, expect, beforeEach, afterEach } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync, existsSync, utimesSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { acquireInboundLock, createProgressTarget, createTypingController, sweepInboundLocks } from '../src/inbound'
-import { progressDir } from '../src/progress-target'
-import type { ApiResult, DiscordClient } from '../src/discord-api'
+import {
+  acquireInboundLock,
+  createProgressTarget,
+  createTypingController,
+  progressDir,
+  sweepInboundLocks,
+  type ThreadOps,
+} from '../src/inbound'
+import { threadName } from '../src/summarize'
 
 const testTmpDir = join(tmpdir(), `discord-inbound-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`)
 let savedStateDir: string | undefined
@@ -118,50 +124,71 @@ function fakeTimers() {
   }
 }
 
-function typingApi() {
+function fakeTyping() {
   const sent: string[] = []
-  const api = {
-    sendTyping: async (id: string): Promise<ApiResult<null>> => {
-      sent.push(id)
-      return { ok: true, value: null }
-    },
-  } as unknown as DiscordClient
-  return { api, sent }
+  const sendTyping = async (chatId: string): Promise<void> => {
+    sent.push(chatId)
+  }
+  return { sendTyping, sent }
 }
 
-test('createTypingController は開始時に typing を送り 再送タイマーを張る', async () => {
-  const t = typingApi()
+test('createTypingController は開始時に typing を送り 再送タイマーを張る', () => {
+  const t = fakeTyping()
   const f = fakeTimers()
-  const c = createTypingController(t.api, { timers: f.timers })
+  const c = createTypingController(t.sendTyping, { timers: f.timers })
   c.start(CH)
-  await Promise.resolve()
   expect(t.sent).toEqual([CH])
   expect(f.intervals[0].ms).toBe(8_000)
   expect(f.timeouts[0].ms).toBe(600_000)
 })
 
-test('createTypingController は再送タイマーで typing を送り直す', async () => {
-  const t = typingApi()
+test('createTypingController は再送タイマーで typing を送り直す', () => {
+  const t = fakeTyping()
   const f = fakeTimers()
-  createTypingController(t.api, { timers: f.timers }).start(CH)
+  createTypingController(t.sendTyping, { timers: f.timers }).start(CH)
   f.intervals[0].fn()
-  await Promise.resolve()
   expect(t.sent).toEqual([CH, CH])
 })
 
-test('createTypingController は同じチャンネルで二重に開始しない', () => {
-  const t = typingApi()
+test('createTypingController は送信の失敗を onError へ渡す', async () => {
+  const errors: string[] = []
   const f = fakeTimers()
-  const c = createTypingController(t.api, { timers: f.timers })
+  const c = createTypingController(async () => {
+    throw new Error('http 403')
+  }, { timers: f.timers, onError: (m) => errors.push(m) })
   c.start(CH)
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(errors).toHaveLength(1)
+  expect(errors[0]).toContain(CH)
+  expect(errors[0]).toContain('http 403')
+})
+
+test('createTypingController は onError が無くても送信の失敗で例外を残さない', async () => {
+  const f = fakeTimers()
+  const c = createTypingController(async () => {
+    throw new Error('http 403')
+  }, { timers: f.timers })
   c.start(CH)
+  await Promise.resolve()
+  await Promise.resolve()
   expect(f.intervals).toHaveLength(1)
 })
 
-test('createTypingController は停止でタイマーを解除する', () => {
-  const t = typingApi()
+test('createTypingController は同じチャンネルで二重に開始しない', () => {
+  const t = fakeTyping()
   const f = fakeTimers()
-  const c = createTypingController(t.api, { timers: f.timers })
+  const c = createTypingController(t.sendTyping, { timers: f.timers })
+  c.start(CH)
+  c.start(CH)
+  expect(f.intervals).toHaveLength(1)
+  expect(t.sent).toEqual([CH])
+})
+
+test('createTypingController は停止でタイマーを解除する', () => {
+  const t = fakeTyping()
+  const f = fakeTimers()
+  const c = createTypingController(t.sendTyping, { timers: f.timers })
   c.start(CH)
   c.stop(CH)
   expect(f.intervals[0].cleared).toBe(true)
@@ -169,9 +196,9 @@ test('createTypingController は停止でタイマーを解除する', () => {
 })
 
 test('createTypingController は停止後に再度開始できる', () => {
-  const t = typingApi()
+  const t = fakeTyping()
   const f = fakeTimers()
-  const c = createTypingController(t.api, { timers: f.timers })
+  const c = createTypingController(t.sendTyping, { timers: f.timers })
   c.start(CH)
   c.stop(CH)
   c.start(CH)
@@ -179,18 +206,18 @@ test('createTypingController は停止後に再度開始できる', () => {
 })
 
 test('createTypingController は安全弁で自動停止する', () => {
-  const t = typingApi()
+  const t = fakeTyping()
   const f = fakeTimers()
-  const c = createTypingController(t.api, { timers: f.timers })
+  const c = createTypingController(t.sendTyping, { timers: f.timers })
   c.start(CH)
   f.timeouts[0].fn()
   expect(f.intervals[0].cleared).toBe(true)
 })
 
 test('createTypingController は stopAll で全チャンネルを止める', () => {
-  const t = typingApi()
+  const t = fakeTyping()
   const f = fakeTimers()
-  const c = createTypingController(t.api, { timers: f.timers })
+  const c = createTypingController(t.sendTyping, { timers: f.timers })
   c.start(CH)
   c.start(THREAD)
   c.stopAll()
@@ -199,60 +226,58 @@ test('createTypingController は stopAll で全チャンネルを止める', () 
 
 // --- createProgressTarget ---
 
-type Posted = { channelId: string; payload: Record<string, unknown> }
-
-function threadApi(over: Record<string, unknown> = {}) {
-  const posted: Posted[] = []
-  const threads: Array<{ channelId: string; messageId: string; payload: Record<string, unknown> }> = []
-  const api = {
-    createMessage: async (channelId: string, payload: Record<string, unknown>) => {
-      posted.push({ channelId, payload })
-      return { ok: true as const, value: { id: ANCHOR } }
+function fakeThreadOps(over: Partial<ThreadOps> = {}) {
+  const anchors: string[] = []
+  const threads: Array<{ chatId: string; anchorId: string; name: string }> = []
+  const ops: ThreadOps = {
+    postAnchor: async (chatId) => {
+      anchors.push(chatId)
+      return ANCHOR
     },
-    startThread: async (channelId: string, messageId: string, payload: Record<string, unknown>) => {
-      threads.push({ channelId, messageId, payload })
-      return { ok: true as const, value: { id: THREAD } }
+    startThread: async (chatId, anchorId, name) => {
+      threads.push({ chatId, anchorId, name })
+      return THREAD
     },
     ...over,
-  } as unknown as DiscordClient
-  return { api, posted, threads }
+  }
+  return { ops, anchors, threads }
 }
 
 const TS = new Date('2026-08-23T11:00:00Z')
 
 test('createProgressTarget は DM をそのまま宛先にする', async () => {
-  const a = threadApi()
-  const target = await createProgressTarget(a.api, { chatId: CH, kind: 'dm', parentId: CH, content: 'hi', ts: TS })
+  const o = fakeThreadOps()
+  const target = await createProgressTarget(o.ops, { chatId: CH, kind: 'dm', parentId: CH, content: 'hi', ts: TS })
   expect(target).toEqual({ id: CH, parent: CH, kind: 'dm' })
-  expect(a.posted).toHaveLength(0)
+  expect(o.anchors).toHaveLength(0)
+  expect(o.threads).toHaveLength(0)
 })
 
 test('createProgressTarget はスレッド内の inbound をそのスレッドへ向ける', async () => {
-  const a = threadApi()
-  const target = await createProgressTarget(a.api, { chatId: THREAD, kind: 'guild', parentId: CH, content: 'hi', ts: TS })
+  const o = fakeThreadOps()
+  const target = await createProgressTarget(o.ops, { chatId: THREAD, kind: 'guild', parentId: CH, content: 'hi', ts: TS })
   expect(target).toEqual({ id: THREAD, parent: CH, kind: 'guild' })
-  expect(a.posted).toHaveLength(0)
+  expect(o.anchors).toHaveLength(0)
+  expect(o.threads).toHaveLength(0)
 })
 
 test('createProgressTarget はチャンネルの inbound でアンカーを投稿してスレッドを作る', async () => {
-  const a = threadApi()
-  const target = await createProgressTarget(a.api, { chatId: CH, kind: 'guild', parentId: CH, content: 'ping', ts: TS })
+  const o = fakeThreadOps()
+  const target = await createProgressTarget(o.ops, { chatId: CH, kind: 'guild', parentId: CH, content: 'ping', ts: TS })
   expect(target).toEqual({ id: THREAD, parent: CH, kind: 'guild' })
-  // アンカーは通知を出さない ZWSP 1 文字である
-  expect(a.posted[0].payload).toEqual({ content: '​', flags: 4096, allowed_mentions: { parse: [] } })
-  expect(a.threads[0].messageId).toBe(ANCHOR)
-  expect(a.threads[0].payload.auto_archive_duration).toBe(60)
-  expect(String(a.threads[0].payload.name)).toContain('ping')
+  expect(o.anchors).toEqual([CH])
+  expect(o.threads).toEqual([{ chatId: CH, anchorId: ANCHOR, name: threadName('ping', TS) }])
 })
 
 test('createProgressTarget はアンカー投稿に失敗したら親チャンネルへ退避する', async () => {
-  const a = threadApi({ createMessage: async () => ({ ok: false as const, error: 'http 403' }) })
-  const target = await createProgressTarget(a.api, { chatId: CH, kind: 'guild', parentId: CH, content: 'ping', ts: TS })
+  const o = fakeThreadOps({ postAnchor: async () => null })
+  const target = await createProgressTarget(o.ops, { chatId: CH, kind: 'guild', parentId: CH, content: 'ping', ts: TS })
   expect(target).toEqual({ id: CH, parent: CH, kind: 'guild' })
+  expect(o.threads).toHaveLength(0)
 })
 
 test('createProgressTarget はスレッド作成に失敗したら親チャンネルへ退避する', async () => {
-  const a = threadApi({ startThread: async () => ({ ok: false as const, error: 'http 403' }) })
-  const target = await createProgressTarget(a.api, { chatId: CH, kind: 'guild', parentId: CH, content: 'ping', ts: TS })
+  const o = fakeThreadOps({ startThread: async () => null })
+  const target = await createProgressTarget(o.ops, { chatId: CH, kind: 'guild', parentId: CH, content: 'ping', ts: TS })
   expect(target).toEqual({ id: CH, parent: CH, kind: 'guild' })
 })

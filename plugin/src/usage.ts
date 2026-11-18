@@ -184,12 +184,13 @@ function toStoredEntry(item: unknown): ModelUsageEntry | null {
   return { display_name: name, percent, resets_at: resets }
 }
 
-// キャッシュを書く (書けなくても今回の表示には影響しないため失敗は無視する)
-function writeCacheQuietly(path: string, cache: J): void {
+// キャッシュを書き 書けたかを返す
+function writeCache(path: string, cache: J): boolean {
   try {
     writeAtomic(path, JSON.stringify(cache))
+    return true
   } catch {
-    // 次回は試行時刻の記録が無いものとして扱われる
+    return false
   }
 }
 
@@ -207,12 +208,14 @@ export async function currentUsage(
 ): Promise<UsageSnapshot> {
   const cache = readCache(path)
   if (attemptedRecently(cache)) return readCachedUsage(path)
-  // 並走するセッションが同時に取得しないよう 取得の前に試行時刻を記録する
+  // 並走するセッションの重複した取得を減らすため 取得の前に試行時刻を記録する
+  // 記録できなければ 60 秒の下限を守れないため取得しない
   const attemptedAt = nowSec()
-  writeCacheQuietly(path, { ...cache, _attempted_at: attemptedAt })
+  if (!writeCache(path, { ...cache, _attempted_at: attemptedAt })) return readCachedUsage(path)
   const snapshot = await fetchFn()
   if (snapshot === null) return readCachedUsage(path)
-  writeCacheQuietly(path, {
+  // 取得後の書き込みに失敗しても今回の表示には影響しない
+  writeCache(path, {
     _attempted_at: attemptedAt,
     _cached_at: nowSec(),
     data: snapshot.modelScoped,

@@ -186,6 +186,31 @@ test('buildFooter は使用量が無く transcript も無ければ空文字を�
   })).toBe('')
 })
 
+test('notice を渡すと footer のコードブロックの最終行に ⬆️ upstream 0.0.6 が入る', () => {
+  const ownerDir = join(testTmpDir, 'proj')
+  const p = tmpFile('t.jsonl', `${assistantLine()}\n`)
+  const footer = buildFooter({ transcriptPath: p, ownerDir, usage: USAGE, notice: 'upstream 0.0.6' })
+  const lines = footer.split('\n')
+  expect(lines.at(-1)).toBe('```')
+  expect(lines.at(-2)).toBe('⬆️ upstream 0.0.6')
+  expect(lines.at(-3)).toContain('📅 51%(88%)')
+})
+
+test('notice が null なら印を出さない', () => {
+  const ownerDir = join(testTmpDir, 'proj')
+  const p = tmpFile('t.jsonl', `${assistantLine()}\n`)
+  expect(buildFooter({ transcriptPath: p, ownerDir, usage: USAGE, notice: null })).not.toContain('⬆️')
+})
+
+test('notice だけでも footer を組み立てる', () => {
+  expect(buildFooter({
+    transcriptPath: null,
+    ownerDir: null,
+    usage: { weekly: null, session: null, modelScoped: [] },
+    notice: 'upstream 0.0.6',
+  })).toBe('```\n⬆️ upstream 0.0.6\n```')
+})
+
 // --- attachFooter ---
 
 test('attachFooter は末尾チャンクに収まる footer を結合する', () => {

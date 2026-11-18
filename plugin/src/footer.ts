@@ -105,6 +105,7 @@ export function buildFooter(input: {
   transcriptPath: string | null
   ownerDir: string | null
   usage: UsageSnapshot
+  notice?: string | null
   env?: NodeJS.ProcessEnv
 }): string {
   const env = input.env ?? process.env
@@ -123,5 +124,10 @@ export function buildFooter(input: {
   if (input.usage.weekly) rateLimits.seven_day = input.usage.weekly
   if (Object.keys(rateLimits).length > 0) data.rate_limits = rateLimits
 
-  return buildStatusBlock(data, input.ownerDir ? readBranch(input.ownerDir) : null, modelUsageSuffix(input.usage.modelScoped))
+  return buildStatusBlock(
+    data,
+    input.ownerDir ? readBranch(input.ownerDir) : null,
+    modelUsageSuffix(input.usage.modelScoped),
+    input.notice,
+  )
 }

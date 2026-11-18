@@ -65,9 +65,7 @@ export function resolveOwnerChannel(
 }
 
 // inbound 通知のルーティング判定 ---
-// 実体取得の前後で 2 段階に分ける
-// 前段 (classifyInbound) は担当名と識別子だけで判定し 実体取得が要る場合だけ inspect を返す
-// 後段 (decideDelivery) は取得したチャンネル実体で担当を判定する
+// Gateway のキャッシュのチャンネルを toEntity で組み立てた実体から decideDelivery が担当を判定する
 // 判定に失敗する経路はすべて破棄 (fail closed) にする
 
 // DM を担当するのはこの名前のセッションだけである (guild の担当解決には依存しない)
@@ -95,7 +93,7 @@ export const INBOUND_MAX_SKEW_MS = 5 * 60 * 1000
 export type Freshness = 'fresh' | 'TOO_OLD' | 'TOO_NEW' | 'INVALID_ID'
 
 // 通知の鮮度を message_id の生成時刻で見る
-// 実体を取る前と配送の直前の 2 回使う (準備を待つ間に鮮度が切れることがある)
+// ロックを取る前と配送の直前の 2 回使う (準備を待つ間に鮮度が切れることがある)
 export function inboundFreshness(messageId: unknown, now: number = Date.now()): Freshness {
   const sentAt = snowflakeTime(messageId)
   if (sentAt === null) return 'INVALID_ID'
@@ -104,25 +102,7 @@ export function inboundFreshness(messageId: unknown, now: number = Date.now()): 
   return 'fresh'
 }
 
-export type InboundMeta = { chat_id?: unknown; message_id?: unknown }
-
-export type InboundClass =
-  | { action: 'passthrough' }
-  | { action: 'drop'; reason: string }
-  | { action: 'inspect'; owner: string; chatId: string; messageId: string }
-
-// 担当名と通知 meta から 実体取得の要否を決める
-// message_id の生成時刻で鮮度も見る (未来側は時計のずれとして許す)
-export function classifyInbound(ctx: OwnerContext, meta: InboundMeta, now: number = Date.now()): InboundClass {
-  if (ctx.kind === 'none') return { action: 'passthrough' }
-  if (ctx.kind === 'broken') return { action: 'drop', reason: 'ROUTING_BROKEN' }
-  if (!isSnowflake(meta.chat_id) || !isSnowflake(meta.message_id)) return { action: 'drop', reason: 'INVALID_ID' }
-  const freshness = inboundFreshness(meta.message_id, now)
-  if (freshness !== 'fresh') return { action: 'drop', reason: freshness }
-  return { action: 'inspect', owner: ctx.owner, chatId: meta.chat_id, messageId: meta.message_id }
-}
-
-// GET /channels/{id} の応答のうち判定に使う部分
+// 担当の判定に使うチャンネルの部分 (Gateway のキャッシュのチャンネルから toEntity で組み立てる)
 export type ChannelEntity = {
   id?: unknown
   type?: unknown

@@ -1,6 +1,6 @@
 import type { DiscordClient } from './discord-api'
 import { isOwnerName, isSnowflake, snowflakeTime } from './ids'
-import { deleteProgressBody, deleteTarget, isActiveFor, listTargets, readProgressBody } from './progress-target'
+import { deleteTarget, isActiveFor, listTargets } from './progress-target'
 
 // 滞留した進捗スレッドの archive ---
 // 進捗スレッドは自動 archive を 60 分にして作るが 投稿が続く限り開いたままになる
@@ -43,8 +43,7 @@ export function isStaleThread(
 }
 
 // 滞留スレッドを閉じ その宛先を取り除く
-// 宛先 (.meta) は id が一致するものだけ 本体は内容が一致するときだけ消す
-// 片方の一致を理由に他方を消さない (本体と .meta が別スレッドを指しうるため)
+// 宛先 (.meta) は id が一致するものだけを消す
 // 宛先を取り除けなかったスレッドは閉じない (watcher が投稿して開き直すため)
 export async function archiveStaleThreads(
   api: DiscordClient,
@@ -70,7 +69,6 @@ export async function archiveStaleThreads(
     // 閉じる前に この スレッドを指す宛先だけを取り除く
     let released = true
     for (const entry of targets) released = deleteTarget(args.owner, entry.activationId) && released
-    if (readProgressBody(args.owner) === id) released = deleteProgressBody(args.owner) && released
     if (!released) continue
 
     const done = await api.archiveThread(id)

@@ -12,7 +12,7 @@ import {
   type ProxyContext,
 } from '../src/proxy'
 import { readHeartbeat, readPointer, writeHeartbeat, writePointer, type Pointer } from '../src/activation'
-import { listTargets, progressDir, readProgressBody, readTarget, writeTarget } from '../src/progress-target'
+import { listTargets, progressDir, readTarget, writeTarget } from '../src/progress-target'
 import type { ApiResult, DiscordClient } from '../src/discord-api'
 import type { Access } from '../src/access'
 import type { Json, Writer } from '../src/relay'
@@ -202,7 +202,6 @@ test('handleServerMessage は担当チャンネルの通知を転送しロック
 
   expect(h.toClient).toEqual([raw(msg)])
   expect(h.typingStarted).toEqual([CH])
-  expect(readProgressBody(OWNER)).toBe(THREAD)
   expect(readTarget(OWNER, ACT)?.id).toBe(THREAD)
   expect(readTarget(OWNER, ACT)?.parent).toBe(CH)
   expect(readTarget(OWNER, ACT)?.message_id).toBe(MSG)
@@ -306,7 +305,6 @@ test('handleServerMessage は現行 activation が無ければスレッドを作
   await handleServerMessage(msg, raw(msg), h.ctx)
   expect(h.toClient).toEqual([raw(msg)])
   expect(listTargets(OWNER)).toEqual([])
-  expect(readProgressBody(OWNER)).toBe(null)
   expect(h.posted).toHaveLength(0)
 })
 
@@ -615,5 +613,4 @@ test('handleServerMessage は準備を待つ間に鮮度が切れたら配送も
   expect(h.toClient).toEqual([])
   expect(h.typingStopped).toEqual([CH])
   expect(listTargets(OWNER)).toEqual([])
-  expect(readProgressBody(OWNER)).toBe(null)
 })

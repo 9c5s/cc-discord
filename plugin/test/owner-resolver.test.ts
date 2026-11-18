@@ -1,10 +1,10 @@
-import { test, expect, beforeEach, afterEach } from 'bun:test'
+import { test, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test'
 import { mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { createOwnerResolver } from '../src/owner-resolver'
-import { readRoute, writeRoute } from '../src/routes'
-import { readProgressBody, readTarget, writeProgressBody, writeTarget, type ProgressTarget } from '../src/progress-target'
+import * as progressTarget from '../src/progress-target'
+import { readTarget, writeTarget, type ProgressTarget } from '../src/progress-target'
 import type { ApiResult, DiscordClient } from '../src/discord-api'
 import type { Access } from '../src/access'
 
@@ -18,6 +18,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  mock.restore()
   rmSync(testTmpDir, { recursive: true, force: true })
   if (savedStateDir === undefined) delete process.env.DISCORD_STATE_DIR
   else process.env.DISCORD_STATE_DIR = savedStateDir
@@ -28,8 +29,10 @@ const CH = '33333333333333333'
 const OTHER_CH = '66666666666666666'
 const GUILD = '11111111111111111'
 const THREAD = '44444444444444444'
+const NEXT_THREAD = '88888888888888888'
 const ACT = 'b'.repeat(32)
 const DM_ACT = 'c'.repeat(32)
+const NEXT_ACT = 'f'.repeat(32)
 const RUN = 'a'.repeat(32)
 const OTHER_ACT = 'd'.repeat(32)
 const OTHER_RUN = 'e'.repeat(32)
@@ -75,57 +78,44 @@ function resolver(over: Record<string, unknown> = {}) {
   return { r, logs }
 }
 
-// --- 解決 ---
-
-test('createOwnerResolver は担当が 1 件なら route を書く', async () => {
-  const { r } = resolver()
-  await r.resolve()
-  expect(r.channelId()).toBe(CH)
-  expect(r.guildId()).toBe(GUILD)
-  expect(readRoute(OWNER)).toBe(CH)
-})
-
-test('createOwnerResolver は担当が変わらなければ route を書き直さない', async () => {
-  let writes = 0
-  const { r } = resolver({
-    api: {
-      getGuildChannels: async () => {
-        writes++
-        return { ok: true as const, value: [{ id: CH, name: 'proj', type: 0 }] }
-      },
-    },
-  })
-  await r.resolve()
-  writeRoute(OWNER, 'sentinel-check')
-  await r.resolve()
-  // 2 周期目は担当が同じなので route を書き直さない
-  expect(readRoute(OWNER)).toBe('sentinel-check')
-  expect(writes).toBe(2)
-})
-
-test('createOwnerResolver は担当が別チャンネルへ移ったら route と guild の宛先を消す', async () => {
-  // 担当名に一致するチャンネルが 別 id へ移る (どちらも access.groups にある)
-  let channels = [{ id: CH, name: 'proj', type: 0 }]
+// 担当名に一致するチャンネルと取得の成否を途中で切り替えられる resolver を作る
+// 移る先のチャンネルも access.groups に入れておく
+function switchable() {
+  const s = { channels: [{ id: CH, name: 'proj', type: 0 }], guildsFail: false, channelsFail: false }
   const r = createOwnerResolver({
-    api: fakeApi({ getGuildChannels: async () => ({ ok: true, value: channels }) }),
+    api: fakeApi({
+      getGuilds: async () => (s.guildsFail ? { ok: false, error: 'http 500' } : { ok: true, value: [{ id: GUILD }] }),
+      getGuildChannels: async () => (s.channelsFail ? { ok: false, error: 'http 500' } : { ok: true, value: s.channels }),
+    }),
     access: () => ({ allowFrom: [], groups: { [CH]: {}, [OTHER_CH]: {} } }) as Access,
     owner: OWNER,
     runId: RUN,
     now: () => NOW,
   })
+  return { r, s }
+}
+
+// --- 解決 ---
+
+test('createOwnerResolver は担当が 1 件ならそれを担当にする', async () => {
+  const { r } = resolver()
+  await r.resolve()
+  expect(r.channelId()).toBe(CH)
+  expect(r.guildId()).toBe(GUILD)
+})
+
+test('createOwnerResolver は担当が別チャンネルへ移ったら自分の run の guild 宛先を消す', async () => {
+  const { r, s } = switchable()
   await r.resolve()
   writeTarget(OWNER, target())
   writeTarget(OWNER, target({ run_id: OTHER_RUN, activation_id: OTHER_ACT }))
-  writeProgressBody(OWNER, THREAD)
 
-  channels = [{ id: OTHER_CH, name: 'proj', type: 0 }]
+  s.channels = [{ id: OTHER_CH, name: 'proj', type: 0 }]
   await r.resolve()
   expect(r.channelId()).toBe(OTHER_CH)
-  expect(readRoute(OWNER)).toBe(OTHER_CH)
   expect(readTarget(OWNER, ACT)).toBe(null)
   // 他のセッションは自分の resolver で同じ判断に至るため こちらからは触らない
   expect(readTarget(OWNER, OTHER_ACT)).not.toBe(null)
-  expect(readProgressBody(OWNER)).toBe(null)
 })
 
 test('createOwnerResolver は担当を手放しても他の run の宛先は残す', async () => {
@@ -142,15 +132,14 @@ test('createOwnerResolver は担当を手放しても他の run の宛先は残�
   expect(readTarget(OWNER, OTHER_ACT)).not.toBe(null)
 })
 
-test('createOwnerResolver は起動直後の確定では宛先を消さない', async () => {
-  // 同じ担当で並走する他セッションの宛先を巻き込まないため 初回は route だけ書く
+test('createOwnerResolver は起動直後の確定では担当チャンネル以外を指す自分の宛先だけを消す', async () => {
+  // MCP だけが再起動されると 同じ run のまま担当を確定し直す
   writeTarget(OWNER, target())
-  writeProgressBody(OWNER, THREAD)
+  writeTarget(OWNER, target({ activation_id: NEXT_ACT, id: NEXT_THREAD, parent: OTHER_CH }))
   const { r } = resolver()
   await r.resolve()
-  expect(readRoute(OWNER)).toBe(CH)
   expect(readTarget(OWNER, ACT)).not.toBe(null)
-  expect(readProgressBody(OWNER)).toBe(THREAD)
+  expect(readTarget(OWNER, NEXT_ACT)).toBe(null)
 })
 
 test('createOwnerResolver は担当名が空なら REST を呼ばない', async () => {
@@ -205,7 +194,6 @@ test('createOwnerResolver は access.groups から外れた担当を REST を待
   groups = {}
   const pending = r.resolve()
   expect(r.channelId()).toBe(null)
-  expect(readRoute(OWNER)).toBe(null)
   expect(readTarget(OWNER, ACT)).toBe(null)
 
   release()
@@ -213,43 +201,84 @@ test('createOwnerResolver は access.groups から外れた担当を REST を待
   expect(calls).toBe(2)
 })
 
-test('createOwnerResolver は担当が未解決なら route を消す', async () => {
-  const { r } = resolver()
-  await r.resolve()
-  const gone = resolver({ api: { getGuildChannels: async () => ({ ok: true, value: [] }) } })
-  await gone.r.resolve()
-  expect(gone.r.channelId()).toBe(null)
-  expect(readRoute(OWNER)).toBe(null)
-})
-
-test('createOwnerResolver は担当が曖昧なら route を消して警告する', async () => {
+test('createOwnerResolver は担当が曖昧なら担当を持たずに警告する', async () => {
   const ambiguous = resolver({
     api: { getGuildChannels: async () => ({ ok: true, value: [{ id: CH, name: 'proj', type: 0 }, { id: OTHER_CH, name: 'Proj', type: 0 }] }) },
     access: () => ({ allowFrom: [], groups: { [CH]: {}, [OTHER_CH]: {} } }),
   })
-  writeRoute(OWNER, CH)
   await ambiguous.r.resolve()
   expect(ambiguous.r.channelId()).toBe(null)
-  expect(readRoute(OWNER)).toBe(null)
   expect(ambiguous.logs.join(' ')).toContain('ambiguous')
 })
 
 // --- 取得失敗 ---
 
 test('createOwnerResolver は guild 一覧の取得に失敗したら据え置く', async () => {
-  const { r } = resolver()
+  const { r, s } = switchable()
   await r.resolve()
-  const failing = resolver({ api: { getGuilds: async () => ({ ok: false, error: 'http 500' }) } })
-  await failing.r.resolve()
-  expect(readRoute(OWNER)).toBe(CH)
+  writeTarget(OWNER, target())
+  s.guildsFail = true
+  await r.resolve()
+  expect(r.channelId()).toBe(CH)
+  expect(readTarget(OWNER, ACT)).not.toBe(null)
 })
 
 test('createOwnerResolver はチャンネル一覧の取得に失敗したら据え置く', async () => {
-  const { r } = resolver()
+  const { r, s } = switchable()
   await r.resolve()
-  const failing = resolver({ api: { getGuildChannels: async () => ({ ok: false, error: 'http 500' }) } })
-  await failing.r.resolve()
-  expect(readRoute(OWNER)).toBe(CH)
+  writeTarget(OWNER, target())
+  s.channelsFail = true
+  await r.resolve()
+  expect(r.channelId()).toBe(CH)
+  expect(readTarget(OWNER, ACT)).not.toBe(null)
+})
+
+// --- 削除の再試行 ---
+
+test('createOwnerResolver は宛先の削除に失敗したら担当が変わらなくても次の周期で消し直す', async () => {
+  const { r, s } = switchable()
+  await r.resolve()
+  writeTarget(OWNER, target())
+  s.channels = [{ id: OTHER_CH, name: 'proj', type: 0 }]
+  const failing = spyOn(progressTarget, 'deleteTarget').mockReturnValue(false)
+  await r.resolve()
+  failing.mockRestore()
+  expect(readTarget(OWNER, ACT)).not.toBe(null)
+
+  await r.resolve()
+  expect(r.channelId()).toBe(OTHER_CH)
+  expect(readTarget(OWNER, ACT)).toBe(null)
+})
+
+test('createOwnerResolver は消し直すときも担当チャンネルを指す宛先を残す', async () => {
+  // 削除に失敗してから次の周期までに 移った先の inbound が宛先を書くことがある
+  const { r, s } = switchable()
+  await r.resolve()
+  writeTarget(OWNER, target())
+  s.channels = [{ id: OTHER_CH, name: 'proj', type: 0 }]
+  const failing = spyOn(progressTarget, 'deleteTarget').mockReturnValue(false)
+  await r.resolve()
+  failing.mockRestore()
+  writeTarget(OWNER, target({ activation_id: NEXT_ACT, id: NEXT_THREAD, parent: OTHER_CH }))
+
+  await r.resolve()
+  expect(readTarget(OWNER, NEXT_ACT)).not.toBe(null)
+})
+
+test('createOwnerResolver は担当を手放した周期に削除に失敗したら取得に失敗した周期でも消し直す', async () => {
+  const { r, s } = switchable()
+  await r.resolve()
+  writeTarget(OWNER, target())
+  s.channels = []
+  const failing = spyOn(progressTarget, 'deleteTarget').mockReturnValue(false)
+  await r.resolve()
+  failing.mockRestore()
+  expect(r.channelId()).toBe(null)
+  expect(readTarget(OWNER, ACT)).not.toBe(null)
+
+  s.guildsFail = true
+  await r.resolve()
+  expect(readTarget(OWNER, ACT)).toBe(null)
 })
 
 // --- DM と期限切れ ---
@@ -317,23 +346,25 @@ test('createOwnerResolver は取得に失敗しても猶予の内は担当を保
   const { r } = failingAfterFirst(() => clock)
   await r.resolve()
   expect(r.channelId()).toBe(CH)
+  writeTarget(OWNER, target())
 
   clock = NOW + 4 * 60_000
   await r.resolve()
   expect(r.channelId()).toBe(CH)
-  expect(readRoute(OWNER)).toBe(CH)
+  expect(readTarget(OWNER, ACT)).not.toBe(null)
 })
 
 test('createOwnerResolver は取得の失敗が猶予を超えたら担当を手放す', async () => {
   let clock = NOW
   const { r } = failingAfterFirst(() => clock)
   await r.resolve()
+  writeTarget(OWNER, target())
 
   clock = NOW + 6 * 60_000
   await r.resolve()
   expect(r.channelId()).toBeNull()
   expect(r.guildId()).toBeNull()
-  expect(readRoute(OWNER)).toBeNull()
+  expect(readTarget(OWNER, ACT)).toBeNull()
 })
 
 test('createOwnerResolver は解決に成功し直せば猶予を数え直す', async () => {

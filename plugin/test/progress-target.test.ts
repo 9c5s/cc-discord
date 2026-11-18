@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test'
-import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'fs'
+import { mkdirSync, rmSync, writeFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import {
@@ -8,9 +8,7 @@ import {
   isActiveFor,
   listTargets,
   progressDir,
-  readProgressBody,
   readTarget,
-  writeProgressBody,
   writeTarget,
   type ProgressTarget,
 } from '../src/progress-target'
@@ -188,23 +186,4 @@ test('deleteTarget は宛先を削除する', () => {
 
 test('deleteTarget は宛先が無くても成功として扱う', () => {
   expect(deleteTarget(OWNER, ACT)).toBe(true)
-})
-
-// --- 本体 (旧 reader 向け) ---
-
-test('writeProgressBody は素の id を 1 行で書く', () => {
-  expect(writeProgressBody(OWNER, THREAD)).toBe(true)
-  expect(readFileSync(join(progressDir(), OWNER), 'utf8')).toBe(THREAD)
-  expect(readProgressBody(OWNER)).toBe(THREAD)
-})
-
-test('readProgressBody はファイルが無ければ null を返す', () => {
-  expect(readProgressBody(OWNER)).toBe(null)
-})
-
-test('writeProgressBody は本体と宛先を別のファイルに書く', () => {
-  writeProgressBody(OWNER, THREAD)
-  writeTarget(OWNER, target())
-  expect(existsSync(join(progressDir(), OWNER))).toBe(true)
-  expect(existsSync(join(progressDir(), `${OWNER}.${ACT}.meta`))).toBe(true)
 })

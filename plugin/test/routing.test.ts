@@ -2,7 +2,6 @@ import { test, expect } from 'bun:test'
 import {
   INBOUND_MAX_AGE_MS,
   INBOUND_MAX_SKEW_MS,
-  classifyInbound,
   decideDelivery,
   decideOutbound,
   inboundFreshness,
@@ -127,58 +126,10 @@ test('ownerContext は正規化名が空になるディレクトリを broken �
   expect(ownerContext({ CLAUDE_PROJECT_DIR: 'C:\\example\\---' })).toEqual({ kind: 'broken', dir: 'C:\\example\\---' })
 })
 
-// --- classifyInbound ---
-
 const CHAT = '22222222222222222'
 const NOW = 1_800_000_000_000
 // 指定時刻に送られたメッセージの snowflake
 const snowflakeAt = (at: number): string => String(BigInt(at - 1_420_070_400_000) << 22n)
-const MSG = snowflakeAt(NOW)
-const named = { kind: 'named', owner: 'proj', dir: 'C:\\example\\proj' } as const
-
-test('classifyInbound は担当なしのとき通知を素通しする', () => {
-  expect(classifyInbound({ kind: 'none' }, { chat_id: CHAT, message_id: MSG }, NOW)).toEqual({ action: 'passthrough' })
-})
-
-test('classifyInbound は担当名が壊れているとき通知を破棄する', () => {
-  const decision = classifyInbound({ kind: 'broken', dir: 'C:\\example\\---' }, { chat_id: CHAT, message_id: MSG })
-  expect(decision).toEqual({ action: 'drop', reason: 'ROUTING_BROKEN' })
-})
-
-test('classifyInbound は担当名があり識別子が正しければチャンネル実体の確認を求める', () => {
-  expect(classifyInbound(named, { chat_id: CHAT, message_id: MSG }, NOW)).toEqual({
-    action: 'inspect',
-    owner: 'proj',
-    chatId: CHAT,
-    messageId: MSG,
-  })
-})
-
-test('classifyInbound は識別子が snowflake でない通知を破棄する', () => {
-  expect(classifyInbound(named, { chat_id: '../x', message_id: MSG }, NOW)).toEqual({ action: 'drop', reason: 'INVALID_ID' })
-  expect(classifyInbound(named, { chat_id: CHAT, message_id: 'abc' }, NOW)).toEqual({ action: 'drop', reason: 'INVALID_ID' })
-  expect(classifyInbound(named, {}, NOW)).toEqual({ action: 'drop', reason: 'INVALID_ID' })
-})
-
-test('classifyInbound は古すぎる通知を破棄する', () => {
-  const old = snowflakeAt(NOW - 2 * 60 * 60 * 1000)
-  expect(classifyInbound(named, { chat_id: CHAT, message_id: old }, NOW)).toEqual({ action: 'drop', reason: 'TOO_OLD' })
-})
-
-test('classifyInbound は上限の内側の通知を受け入れる', () => {
-  const recent = snowflakeAt(NOW - 30 * 60 * 1000)
-  expect(classifyInbound(named, { chat_id: CHAT, message_id: recent }, NOW)).toEqual({
-    action: 'inspect',
-    owner: 'proj',
-    chatId: CHAT,
-    messageId: recent,
-  })
-})
-
-test('classifyInbound は時計のずれで少し未来の通知を受け入れる', () => {
-  const future = snowflakeAt(NOW + 60_000)
-  expect(classifyInbound(named, { chat_id: CHAT, message_id: future }, NOW).action).toBe('inspect')
-})
 
 // --- decideDelivery ---
 
@@ -339,14 +290,6 @@ test('decideOutbound は担当名が壊れているセッションの送信を�
   expect(decideOutbound({ kind: 'broken', dir: '/w/---' }, { ownerChannelId: null, chatId: OUT_OTHER, entity })).toEqual({
     ok: false,
     reason: 'ROUTING_BROKEN',
-  })
-})
-
-test('classifyInbound は未来に寄りすぎた通知を破棄する', () => {
-  const future = snowflakeAt(NOW + 10 * 60 * 1000)
-  expect(classifyInbound(named, { chat_id: CHAT, message_id: future }, NOW)).toEqual({
-    action: 'drop',
-    reason: 'TOO_NEW',
   })
 })
 

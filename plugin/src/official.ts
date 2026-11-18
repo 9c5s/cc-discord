@@ -14,6 +14,7 @@ import { basename, join } from 'path'
 // 通知 meta / 起動コマンド / skills) を確認してから追加する
 export const SUPPORTED_SERVERS: Record<string, string[]> = {
   '0.0.4': ['6edc17d9e9d04930967361ba51c8e03b8f8508647a1dfc11d79ee6a0eb1010b7'],
+  '0.0.5': ['ee58c9af69d7dc958cfed207d5601205d935c89b4f31182a35ea3b2680f81595'],
 }
 
 // ファイルの SHA-256 を 16 進小文字で返す

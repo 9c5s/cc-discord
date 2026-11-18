@@ -3,9 +3,19 @@
 //   bun tools/upstream.ts merge [dir]   3-way マージで plugin/ へ取り込む
 import { spawnSync } from 'child_process'
 import { createHash } from 'crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'fs'
 import { homedir } from 'os'
-import { dirname, join } from 'path'
+import { dirname, join, sep } from 'path'
 
 const SOURCE = 'anthropics/claude-plugins-official/external_plugins/discord'
 
@@ -85,16 +95,27 @@ const defaultRun: MergeRunner = (ours, base, theirs) => {
   return { code: result.status, stdout: result.stdout }
 }
 
-// upstream/discord を新版の写しで置き換える
-function replaceSnapshot(upstreamDir: string, newDir: string): void {
-  rmSync(upstreamDir, { recursive: true, force: true })
+// 新版の写しを dir に作る
+function copySnapshot(newDir: string, dir: string): void {
   for (const f of [...TRACKED_FILES, ...COPIED_FILES]) {
     const from = join(newDir, f)
     if (!existsSync(from)) continue
-    const to = join(upstreamDir, f)
+    const to = join(dir, f)
     mkdirSync(dirname(to), { recursive: true })
     copyFileSync(from, to)
   }
+}
+
+// 一方が他方と同じか その中にあるか (リンクを解決し Windows では大文字小文字を区別しない)
+function overlaps(a: string, b: string): boolean {
+  const real = (p: string): string => {
+    const resolved = realpathSync.native(p)
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  }
+  const within = (inner: string, outer: string): boolean =>
+    inner === outer || inner.startsWith(outer.endsWith(sep) ? outer : outer + sep)
+  const [x, y] = [real(a), real(b)]
+  return within(x, y) || within(y, x)
 }
 
 export function mergeUpstream(opts: { repoRoot: string; newDir: string; run?: MergeRunner }): {
@@ -105,9 +126,14 @@ export function mergeUpstream(opts: { repoRoot: string; newDir: string; run?: Me
   const { repoRoot, newDir, run = defaultRun } = opts
   const upstreamDir = join(repoRoot, 'upstream', 'discord')
   const pluginDir = join(repoRoot, 'plugin')
+  // 新版の写しと退避した旧版を置く (途中で失敗すると残る)
+  const workDir = join(repoRoot, 'upstream', 'discord.tmp')
 
   const version = readVersion(newDir)
   if (version === null) throw new Error(`新版の .claude-plugin/plugin.json から版を読み取れません: ${newDir}`)
+  for (const [label, dir] of [['upstream/discord', upstreamDir], ['plugin', pluginDir]]) {
+    if (overlaps(newDir, dir)) throw new Error(`取り込み元が ${label} と重なっています: ${newDir}`)
+  }
   const { added } = compareDirs(upstreamDir, newDir)
 
   // 全結果を集めてから書き込む (1 件でもエラーなら何も書かない)
@@ -133,15 +159,29 @@ export function mergeUpstream(opts: { repoRoot: string; newDir: string; run?: Me
   }
   const lockfile = join(newDir, 'bun.lock')
   if (existsSync(lockfile)) results.set('bun.lock', readFileSync(lockfile))
+  const meta = { source: SOURCE, version, server_sha256: sha256File(join(newDir, 'server.ts')) }
+
+  // plugin へ書く前に新版の写しを用意する (失敗したら何も変えずに終える)
+  const staged = join(workDir, 'new')
+  mkdirSync(workDir)
+  try {
+    copySnapshot(newDir, staged)
+  } catch (error) {
+    rmSync(workDir, { recursive: true, force: true })
+    throw error
+  }
 
   for (const [f, content] of results) {
     const path = join(pluginDir, f)
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, content)
   }
-  replaceSnapshot(upstreamDir, newDir)
-  const meta = { source: SOURCE, version, server_sha256: sha256File(join(newDir, 'server.ts')) }
   writeFileSync(join(pluginDir, 'upstream.json'), `${JSON.stringify(meta, null, 2)}\n`)
+
+  // 基準の版は最後に入れ替える
+  renameSync(upstreamDir, join(workDir, 'old'))
+  renameSync(staged, upstreamDir)
+  rmSync(workDir, { recursive: true, force: true })
 
   return { version, conflicts, added }
 }

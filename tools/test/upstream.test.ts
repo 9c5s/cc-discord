@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { dirname, join, relative } from 'path'
 import {
@@ -315,6 +315,96 @@ test('新版の版を読めなければ例外を投げ何も変えない', () =>
   const before = snapshot(repoRoot)
 
   expect(() => mergeUpstream({ repoRoot, newDir, run: cleanRun })).toThrow(/plugin\.json/)
+
+  expect(snapshot(repoRoot)).toEqual(before)
+})
+
+// --- 取り込み元の重なり ---
+
+// dir に追跡対象と plugin.json を置き 取り込み元として読める形にする
+function seedSource(dir: string): void {
+  for (const f of TRACKED_FILES) write(dir, f, `source ${f}\n`)
+  write(dir, '.claude-plugin/plugin.json', pluginJson('0.0.7'))
+}
+
+function expectOverlapRejected(dir: string): void {
+  const before = snapshot(repoRoot)
+  expect(() => mergeUpstream({ repoRoot, newDir: dir, run: cleanRun })).toThrow(/重なっています/)
+  expect(snapshot(repoRoot)).toEqual(before)
+}
+
+test('取り込み元に upstream/discord 自身を渡すと例外を投げ何も変えない', () => {
+  seed(SAME)
+
+  expectOverlapRejected(upstreamDir)
+})
+
+test('取り込み元に upstream/discord の中のディレクトリを渡すと例外を投げ何も変えない', () => {
+  seed(SAME)
+  seedSource(join(upstreamDir, 'nested'))
+
+  expectOverlapRejected(join(upstreamDir, 'nested'))
+})
+
+test('取り込み元に upstream/discord を含むディレクトリを渡すと例外を投げ何も変えない', () => {
+  seed(SAME)
+  seedSource(join(repoRoot, 'upstream'))
+
+  expectOverlapRejected(join(repoRoot, 'upstream'))
+})
+
+test('取り込み元に plugin を渡すと例外を投げ何も変えない', () => {
+  seed(SAME)
+  write(pluginDir, '.claude-plugin/plugin.json', pluginJson('0.0.1'))
+
+  expectOverlapRejected(pluginDir)
+})
+
+test('取り込み元に upstream/discord を指すリンクを渡しても例外を投げ何も変えない', () => {
+  seed(SAME)
+  const link = join(tmp, 'link')
+  symlinkSync(upstreamDir, link, 'junction')
+
+  expectOverlapRejected(link)
+})
+
+// --- 書き込みの順序 ---
+
+test('取り込みの後に upstream の下へ作業用のディレクトリを残さない', () => {
+  seed(SAME)
+
+  mergeUpstream({ repoRoot, newDir, run: cleanRun })
+
+  expect(readdirSync(join(repoRoot, 'upstream'))).toEqual(['discord'])
+})
+
+test('新版の写しの用意で読み取りに失敗したら 例外を投げ何も変えない', () => {
+  seed({ base: 'a\n', plugin: 'a\n', next: 'a2\n' })
+  write(pluginDir, 'upstream.json', '{"version":"0.0.5"}')
+  const before = snapshot(repoRoot)
+  const manifest = join(newDir, '.claude-plugin', 'plugin.json')
+  let count = 0
+  // マージの後に 写すだけのファイルを読めない形 (ディレクトリ) に変える
+  const run: MergeRunner = () => {
+    count += 1
+    if (count === TRACKED_FILES.length) {
+      rmSync(manifest)
+      mkdirSync(manifest)
+    }
+    return { code: 0, stdout: 'merged\n' }
+  }
+
+  expect(() => mergeUpstream({ repoRoot, newDir, run })).toThrow()
+
+  expect(snapshot(repoRoot)).toEqual(before)
+})
+
+test('作業用のディレクトリを作れなければ 例外を投げ何も変えない', () => {
+  seed({ base: 'a\n', plugin: 'a\n', next: 'a2\n' })
+  write(repoRoot, 'upstream/discord.tmp', 'left over\n')
+  const before = snapshot(repoRoot)
+
+  expect(() => mergeUpstream({ repoRoot, newDir, run: cleanRun })).toThrow(/discord\.tmp/)
 
   expect(snapshot(repoRoot)).toEqual(before)
 })

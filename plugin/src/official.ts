@@ -84,7 +84,7 @@ export function inspectOfficial(
 }
 
 // preflight (--check) の出力
-// 移行手順とアップデート手順で 起動前に対応状況を確かめるために使う
+// アップデート手順で 起動前に対応状況を確かめるために使う
 function printCheck(): void {
   let dir: string
   try {

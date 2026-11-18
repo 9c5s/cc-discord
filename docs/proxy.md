@@ -44,8 +44,7 @@ cc-discord/                       (リポジトリ = marketplace)
       stale-threads.ts            滞留スレッドの archive
       session-start.ts            SessionStart hook
       watch.ts                    transcript の監視 (watcher 本体)
-      ids.ts / normalize.ts / routes.ts / status.ts / summarize.ts / usage.ts
-      watch-launch.ts / watch-stop.ts / statusline-tee.ts  移行期間の互換 shim
+      ids.ts / normalize.ts / state-dir.ts / status.ts / summarize.ts / usage.ts
 ```
 
 判定ロジックは純粋関数として切り出し、REST 呼び出しと配線から分けている。
@@ -57,6 +56,10 @@ cc-discord/                       (リポジトリ = marketplace)
 通知どうしの順序はキューで保つため、ロックの取得と宛先の書き込みが前後することはない。
 
 ## 起動と接続
+
+このリポジトリを marketplace として登録し、`cc-discord` を user scope でインストールする。
+公式の `discord@claude-plugins-official` は無効化しておく。
+有効なままだと、新しいセッションで proxy の子とは別に公式 server が起動する。
 
 channels は研究プレビュー中で、`--channels` に渡せるのは Anthropic が維持する既定の allowlist に載ったプラグインか、managed settings の `allowedChannelPlugins` で承認したプラグインだけである。
 cc-discord は第三者プラグインなので後者で承認する。
@@ -104,6 +107,11 @@ cc-discord が要求するのは `--channels` だけで、承認をどこまで�
 proxy は自分の親プロセス (Claude Code) の PID と組み合わせて、どの起動のどの activation に属するかを判定する。
 `CC_DISCORD_RUN_ID` を持たないプロセスでは進捗転送だけが無効になり、配送と reply は動く。
 
+起動関数を書き換えたら、シェルを開き直してから起動する。
+稼働中のシェルは、起動時に読んだ関数定義を保持し続けるためである。
+古い関数のまま起動して `--channels` に cc-discord が渡らないと、cc-discord が channel として有効にならず、inbound が Claude Code に届かない。
+このとき proxy は inbound を受け取ってロックまで取るため、ログに破棄の記録が残らず、症状は Discord に反応しないことだけになる。
+
 ### 公式バージョンの固定
 
 take over は公式 0.0.4 の `reply` / `edit_message` の意味論を移植したものである。
@@ -119,7 +127,7 @@ Claude Code はこれを接続失敗として扱い、そのセッションは D
 passthrough では全セッションがルーティングもロックも持たない公式 server になり、重複処理と担当外への配送が再発するためである。
 
 `bun plugin/src/official.ts --check` は、インストール先、実行ファイルの hash、素のファイル (`server.ts.orig` があればそれ) の hash、対応表との一致を表示する。
-移行手順とアップデート手順で使う。
+アップデート手順で使う。
 
 ### 検証用の担当上書き
 
@@ -181,10 +189,14 @@ REST の一時的な失敗で配送を落とさず、障害が長引くときは
 watcher は送信のたびに自分で担当を解決し直すため、一覧の取得に失敗した時点で進捗を送らない。
 進捗は送れなくても欠落するだけで害がなく、猶予の状態を別プロセスと共有する複雑さに見合わないためである。
 
-担当が別のチャンネルへ移ったときと担当を手放したときは、route と進捗の宛先を消す。
+担当を手放したときは、guild の進捗の宛先を消す。
+起動直後に担当を確定したときと、担当が別のチャンネルへ移ったときは、担当チャンネル以外を指す宛先だけを消す。
+担当チャンネル以外を指す宛先は進捗の送信の gate を通らないため、残しても使われない。
+担当チャンネルを指す宛先は使用中でありうるので消さない。
+削除に失敗した場合は、担当が変わらなくても次の周期で消し直す。
+
 消すのは自分の run の宛先だけで、同じ担当で並走する他セッションの宛先には触れない。
 他セッションも自分の resolver で同じ REST の結果を見て同じ判断に至るため、こちらから消すと、健全なセッションの進捗を次の inbound まで止めるだけになる。
-本体 (`progress-thread/<owner>`) は run を区別できないので、担当を失った時点で消す (旧 reader を止める側に寄せる)。
 
 ### 進捗スレッド
 
@@ -293,7 +305,6 @@ proxy は起動直後と 5 分ごとに、担当チャンネル配下の稼働�
 
 閉じる前に、そのスレッドを指す宛先だけを取り除く。
 宛先を残したままにすると、watcher が閉じたスレッドへ投稿して開き直してしまう。
-宛先ファイルは id が一致するものだけ、本体は内容が一致するときだけ削除し、片方の一致を理由に他方を消さない。
 削除に失敗した宛先が 1 つでもあれば、そのスレッドは閉じずに次の周期へ回す。
 
 ## 進捗転送の仕組み
@@ -347,8 +358,8 @@ heartbeat の失効は proxy の書き直しが遅れているだけのことが
 差し替えられていたら 1 からやり直す。
 そのまま投稿すると、進捗が前のやり取りのスレッドへ出る。
 
-判定は宛先ファイルの自己申告値や route ファイルではなく、API から取得した実体で行う。
-そのため、route ファイルの更新や削除に失敗していても、担当外への送信は止まる。
+判定は宛先ファイルの自己申告値ではなく、API から取得した実体で行う。
+そのため、担当の移動に伴う宛先の削除に失敗していても、担当外への送信は止まる。
 
 ## ファイル契約 (state dir)
 
@@ -360,9 +371,7 @@ state dir の既定は `~/.claude/channels/discord` で、`DISCORD_STATE_DIR` �
 
 | パス | 内容 |
 | --- | --- |
-| `routes/<owner>` | 担当チャンネル id。移行期間の旧 reader のために書き続ける |
-| `progress-thread/<owner>` | 進捗の宛先 id。同じく旧 reader のために書く |
-| `progress-thread/<owner>.<activation_id>.meta` | 進捗の宛先 (JSON)。新しい reader はこれだけを読む |
+| `progress-thread/<owner>.<activation_id>.meta` | 進捗の宛先 (JSON) |
 | `progress-thread/<owner>.lock-<message_id>` | inbound の排他ロック。担当解決の周期で 12 時間より古いものを回収する |
 | `session/by-pid/<claude_pid>.json` | 現行 activation のポインタ |
 | `session/by-pid/<claude_pid>.<run_id>.heartbeat` | proxy の heartbeat |
@@ -387,7 +396,7 @@ heartbeat が止まれば watcher は待機へ移って 30 秒で終了し、`ru
 
 1. 同じ activation の次の inbound による上書き
 2. activation の切り替え (新しい SessionStart)
-3. 担当の移動と喪失による自分の run の宛先の削除
+3. 担当の確定、移動、喪失に伴う自分の run の宛先の削除
 4. 書き込みから 12 時間
 
 返信では終わらせない。
@@ -593,38 +602,6 @@ compaction は同じプロセスの中で起きるため、起動ディレクト
   宛先は同じユーザーの同じ担当チャンネル内なので、担当外や他のユーザーへは届かない。
 - 担当名に一致する `GuildText` が複数登録されていると、そのプロジェクトの guild への配送と進捗の転送が止まる (同名チャンネルを整理するまで)。
 - `DISCORD_ACCESS_MODE=static` のとき、`access.json` は proxy と watcher がそれぞれ起動時に読むため、両者の内容が食い違うことがある。
-
-## 移行手順
-
-グローバルの hook の symlink は作業ツリーを直接指すため、実装は別の git worktree で行う。
-本リリースを作業ツリーへ反映する時点から検証を終えるまで、一般の新しいセッションを開始しない (例外は検証用のセッション 1 件だけ)。
-稼働中のセッションはメモリ上の旧実装で動き続けるため影響を受けない。
-同じ担当で旧セッションと新セッションを並走させない。
-
-0. 本リリースを main にマージし、作業ツリーを更新する。
-   この時点で、グローバルの `watch-launch.ts` は何もしない shim、`statusline-tee.ts` はパススルーのみ、`watch-stop.ts` は旧 watcher の停止だけの shim に切り替わる。
-1. marketplace を登録し、`cc-discord` を user scope でインストールする。
-2. `discord@claude-plugins-official` を無効化する (以後、新しいセッションでは公式 server が起動しない)。
-3. キャッシュの `server.ts` を `server.ts.orig` で復元し、`bun plugin/src/official.ts --check` で実行ファイルの hash が対応表と一致することを確認する。
-4. 「起動と接続」の managed settings を置き、シェルの起動関数を同じ節の形に更新する。
-   稼働中のシェルは起動時に読んだ関数定義を保持し続けるため、手順 5 以降はシェルを開き直してから起動する。
-5. 旧セッションが動いていない担当で検証セッションを 1 つ起動し、確認ダイアログが出ずに channel が登録されること、inbound からスレッド、進捗、返信と footer までの流れ、ポインタと heartbeat と宛先ファイルの生成、watcher が 1 本であること、proxy と hook が同じ `CC_DISCORD_RUN_ID` を観測していることを確認する。
-   SessionStart hook は exec form (`command` と `args`) で登録しているため、ポインタが実際に書かれることをもって hook の起動も確認する。
-   担当外のチャンネル id を指して `fetch_messages` や `reply` が拒否されること、担当チャンネルでは通ることも、この検証で確かめる。
-6. シェルを開き直してから全セッションを再起動する。
-   古い関数のまま起動すると `--channels` が無効化済みの公式プラグインを指したままになり、cc-discord が channel として有効にならず inbound が届かない。
-   このとき proxy は inbound を受け取ってロックまで取るため、ログに破棄の記録が残らず、症状は Discord に反応しないことだけになる。
-   旧セッションの終了時は、グローバルの `watch-stop.ts` shim が旧 watcher を止める。
-   再起動後、`watch-<owner>.pid` のプロセスが残っていないことを確認する。
-7. グローバルの settings から hooks と statusLine の記述と symlink を削除する。
-8. 次のリリースで shim 3 つと本体の書き込みを外し、残っている `progress-thread/<owner>` と `watch-<owner>.pid` を一度だけ掃除して、もう一度全セッションを再起動する。
-
-手順 5 で失敗した場合は、検証セッションを終了し、worktree で修正して手順 0 からやり直す。
-旧運用へ全面的に戻す場合は、起動関数を戻し、managed settings を消し、公式プラグインを再び有効化し、キャッシュに旧パッチを再適用し、作業ツリーを前の版に戻し、`cc-discord` を無効化する。
-managed settings を残したままだと、既定の allowlist が置き換わったままになり公式の channel プラグインが登録されない。
-
-同じ担当で旧セッションと新セッションが並走すると、旧 server がロックを取った inbound には宛先ファイルが書かれず、新 watcher は投稿しない。
-一方で旧 watcher は、ロックを取ったセッションと同じ transcript を監視している保証が無いため、進捗の欠落や別セッションの進捗の混入が起こる。
 
 ## アップデート手順
 

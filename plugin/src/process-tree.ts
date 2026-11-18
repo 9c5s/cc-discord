@@ -5,23 +5,50 @@ import { readFileSync } from 'fs'
 export type ProcessInfo = { pid: number; ppid: number; startMs: number; argv: string[] | null }
 export type ProcessLookup = { kind: 'found'; info: ProcessInfo } | { kind: 'missing' } | { kind: 'error' }
 
-// 二重引用符の外の空白で区切り二重引用符自体は引数に残さない
+// Windows の引数分割の規則 (CommandLineToArgvW) で分ける
 export function splitCommandLine(cmd: string): string[] {
   const args: string[] = []
   let current = ''
   let inQuote = false
   let started = false
-  for (const ch of cmd) {
-    if (ch === '"') {
-      inQuote = !inQuote
+  let i = 0
+  while (i < cmd.length) {
+    const ch = cmd[i]
+    if (ch === '\\') {
+      let count = 0
+      while (cmd[i] === '\\') {
+        count++
+        i++
+      }
+      // 引用符の直前のバックスラッシュは 2 個で 1 個になり 奇数個なら引用符がリテラルになる
+      if (cmd[i] === '"') {
+        current += '\\'.repeat(count >> 1)
+        if (count % 2 === 1) {
+          current += '"'
+          i++
+        }
+      } else {
+        current += '\\'.repeat(count)
+      }
+      started = true
+    } else if (ch === '"') {
+      if (inQuote && cmd[i + 1] === '"') {
+        current += '"'
+        i += 2
+      } else {
+        inQuote = !inQuote
+        i++
+      }
       started = true
     } else if (!inQuote && (ch === ' ' || ch === '\t')) {
       if (started) args.push(current)
       current = ''
       started = false
+      i++
     } else {
       current += ch
       started = true
+      i++
     }
   }
   if (started) args.push(current)

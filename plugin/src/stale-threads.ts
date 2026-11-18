@@ -45,14 +45,16 @@ export function isStaleThread(
 }
 
 // 滞留スレッドを閉じ 閉じられたものの id を返す
+// currentTargetId は待つ間に宛先が変わりうるため スレッドごとに閉じる直前に呼ぶ
 export async function archiveStaleThreads(
   ops: { listActiveThreads(): Promise<ThreadView[]>; archive(id: string): Promise<boolean> },
-  opts: { parentId: string; botId: string; currentTargetId: string | null; now?: number },
+  opts: { parentId: string; botId: string; currentTargetId: () => string | null; now?: number },
 ): Promise<string[]> {
+  const { parentId, botId } = opts
   const now = opts.now ?? Date.now()
   const archived: string[] = []
   for (const t of await ops.listActiveThreads()) {
-    if (!isStaleThread(t, { ...opts, now })) continue
+    if (!isStaleThread(t, { parentId, botId, currentTargetId: opts.currentTargetId(), now })) continue
     if (await ops.archive(t.id)) archived.push(t.id)
   }
   return archived

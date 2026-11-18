@@ -98,7 +98,7 @@ function fakeOps(threads: ThreadView[], archive: (id: string) => Promise<boolean
   }
 }
 
-const args = { parentId: CH, botId: BOT, currentTargetId: null, now: NOW }
+const args = { parentId: CH, botId: BOT, currentTargetId: () => null, now: NOW }
 
 test('archiveStaleThreads は対象のスレッドだけを archive する', async () => {
   const o = fakeOps([thread(), thread({ id: '44444444444444445', lastMessageId: snowflakeAt(ALMOST) })])
@@ -108,8 +108,39 @@ test('archiveStaleThreads は対象のスレッドだけを archive する', asy
 
 test('archiveStaleThreads は現在の宛先のスレッドを閉じない', async () => {
   const o = fakeOps([thread()])
-  expect(await archiveStaleThreads(o.ops, { ...args, currentTargetId: THREAD })).toEqual([])
+  expect(await archiveStaleThreads(o.ops, { ...args, currentTargetId: () => THREAD })).toEqual([])
   expect(o.archived).toEqual([])
+})
+
+test('archiveStaleThreads は一覧の取得を待つ間に宛先になったスレッドを閉じない', async () => {
+  let current: string | null = null
+  let resolveList!: (threads: ThreadView[]) => void
+  const archived: string[] = []
+  const running = archiveStaleThreads(
+    {
+      listActiveThreads: () => new Promise<ThreadView[]>((r) => (resolveList = r)),
+      archive: async (id) => {
+        archived.push(id)
+        return true
+      },
+    },
+    { ...args, currentTargetId: () => current },
+  )
+  current = THREAD
+  resolveList([thread()])
+  expect(await running).toEqual([])
+  expect(archived).toEqual([])
+})
+
+test('archiveStaleThreads は先のスレッドの archive を待つ間に宛先になったスレッドを閉じない', async () => {
+  const other = '44444444444444446'
+  let current: string | null = null
+  const o = fakeOps([thread(), thread({ id: other })], async (id) => {
+    if (id === THREAD) current = other
+    return true
+  })
+  expect(await archiveStaleThreads(o.ops, { ...args, currentTargetId: () => current })).toEqual([THREAD])
+  expect(o.archived).toEqual([THREAD])
 })
 
 test('archiveStaleThreads は archive が false を返したスレッドを結果に含めない', async () => {
@@ -121,5 +152,5 @@ test('archiveStaleThreads は archive が false を返したスレッドを結�
 
 test('archiveStaleThreads は now を省略すると現在時刻で判定する', async () => {
   const o = fakeOps([thread({ lastMessageId: snowflakeAt(Date.now() - 14 * HOUR) })])
-  expect(await archiveStaleThreads(o.ops, { parentId: CH, botId: BOT, currentTargetId: null })).toEqual([THREAD])
+  expect(await archiveStaleThreads(o.ops, { parentId: CH, botId: BOT, currentTargetId: () => null })).toEqual([THREAD])
 })

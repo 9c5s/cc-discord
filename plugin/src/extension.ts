@@ -204,7 +204,7 @@ export function createExtension(deps: {
     return true
   }
 
-  const archive = async (): Promise<void> => {
+  const archiveOnce = async (): Promise<void> => {
     const r = resolveOwned()
     if (r.kind !== 'resolved') return
     const botId = ops.botId()
@@ -212,9 +212,21 @@ export function createExtension(deps: {
     const { guildId, channelId } = r
     const archived = await archiveStaleThreads(
       { listActiveThreads: () => ops.listActiveThreads(guildId), archive: (id) => ops.archive(id) },
-      { parentId: channelId, botId, currentTargetId: forwarder.currentTargetId(), now: now() },
+      { parentId: channelId, botId, currentTargetId: () => forwarder.currentTargetId(), now: now() },
     )
     if (archived.length > 0) log(`[archive] archived ${archived.length} stale thread(s)`)
+  }
+
+  // 前の回が終わる前に呼ばれたら何もしない
+  let archiving = false
+  const archive = async (): Promise<void> => {
+    if (archiving) return
+    archiving = true
+    try {
+      await archiveOnce()
+    } finally {
+      archiving = false
+    }
   }
 
   // 同期の例外も reject もログに残して次の周期へ進む

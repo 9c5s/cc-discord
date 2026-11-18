@@ -534,6 +534,48 @@ test('滞留スレッドの archive は start の直後と 5 分ごとに行い 
   ])
 })
 
+test('滞留スレッドの一覧の取得を待つ間に inbound でそのスレッドが宛先になったら 閉じない', async () => {
+  writeActivation()
+  const stale = (id: string): ThreadView => ({
+    id,
+    parentId: OWNER_CH,
+    ownerId: BOT,
+    name: '[01/01 00:00] old',
+    autoArchiveDuration: 60,
+    lastMessageId: snowflakeAt(NOW - 14 * HOUR),
+    createdTimestamp: null,
+  })
+  let resolveList!: (threads: ThreadView[]) => void
+  const w = setup({
+    ops: { listActiveThreads: () => new Promise<ThreadView[]>((r) => (resolveList = r)) },
+  })
+  w.ext.start()
+  expect(await w.ext.admitInbound(inbound(progressThread))).toBe(true)
+  resolveList([stale(STALE_THREAD), stale(PROGRESS_THREAD)])
+  await flush()
+  expect(w.named('archive')).toEqual([['archive', STALE_THREAD]])
+})
+
+test('滞留スレッドの archive は前の回が終わるまで次の回を始めない', async () => {
+  let resolveList!: (threads: ThreadView[]) => void
+  let lists = 0
+  const w = setup({
+    ops: {
+      listActiveThreads: (): Promise<ThreadView[]> => {
+        lists++
+        return lists === 1 ? new Promise((r) => (resolveList = r)) : Promise.resolve([])
+      },
+    },
+  })
+  w.ext.start()
+  await w.timers.fire(5 * 60_000)
+  expect(lists).toBe(1)
+  resolveList([])
+  await flush()
+  await w.timers.fire(5 * 60_000)
+  expect(lists).toBe(2)
+})
+
 test('周期処理は例外を投げても止まらずログに残す', async () => {
   let n = 0
   const w = setup({

@@ -3,7 +3,7 @@ import { isSnowflake, snowflakeTime } from './ids'
 
 // 担当名の解決 ---
 // 担当ディレクトリは CC_DISCORD_PROJECT_DIR (検証用の上書き) を CLAUDE_PROJECT_DIR より優先する
-// proxy / hook / watcher がすべてこの関数を使うため 同じセッションの全構成要素が同じ担当名になる
+// server と hook がどちらもこの関数を使うため 同じセッションでは同じ担当名になる
 
 export type OwnerContext =
   | { kind: 'none' }
@@ -22,7 +22,7 @@ export function ownerContext(env: NodeJS.ProcessEnv = process.env): OwnerContext
 }
 
 // 担当チャンネルの決定関数 ---
-// proxy の担当解決と watcher の outbound gate が同じ関数を使い 同じ入力から同じ結果を得る
+// inbound の配送と送信系ツールの宛先と進捗の投稿の判定が同じ関数を使い 同じ入力から同じ結果を得る
 // 候補が複数のときに先頭を選ぶ規則は設けず 曖昧として fail closed にする
 
 // GuildText のチャンネル種別

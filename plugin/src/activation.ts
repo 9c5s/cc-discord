@@ -132,10 +132,9 @@ function isAbandoned(pid: number, lookup: (pid: number) => ProcessLookup): boole
   return r.info.startMs > p.written_at
 }
 
-// 古いポインタと heartbeat の掃除 ---
-// ポインタは 自分の PID 以外で プロセスが存在しないか PID が再利用されたと判定できたものだけを消す
+// 古いポインタの掃除 ---
+// 自分の PID 以外で プロセスが存在しないか PID が再利用されたと判定できたものだけを消す
 // 照会に失敗したものは プロセスが無いと判定できないため残す
-// heartbeat はもう読まないので すべて消す
 export function sweepStale(
   selfPid: number,
   lookup: (pid: number) => ProcessLookup = lookupProcess,
@@ -149,21 +148,11 @@ export function sweepStale(
 
   const removed: string[] = []
   const kept: string[] = []
-  const record = (name: string, ok: boolean): void => {
-    if (ok) removed.push(name)
-    else kept.push(name)
-  }
-
   for (const name of names) {
-    if (/^\d{1,10}\.[0-9a-f]{32}\.heartbeat$/.test(name)) {
-      record(name, removeFile(name))
-      continue
-    }
-
     const pt = /^(\d{1,10})\.json$/.exec(name)
     if (!pt) continue
     const pid = Number(pt[1])
-    if (pid !== selfPid && isAbandoned(pid, lookup)) record(name, removeFile(name))
+    if (pid !== selfPid && isAbandoned(pid, lookup) && removeFile(name)) removed.push(name)
     else kept.push(name)
   }
 

@@ -42,7 +42,6 @@ export function acquireInboundLock(owner: string, messageId: string): boolean {
 }
 
 // 同じ担当の古いロックを回収する
-// 宛先ファイル (.meta) には触れない
 export function sweepInboundLocks(owner: string, now: number = Date.now()): number {
   if (!isOwnerName(owner)) return 0
   let names: string[]

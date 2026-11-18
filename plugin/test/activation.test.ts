@@ -227,13 +227,14 @@ test('sweepStale は存在するプロセスの解析できないポインタを
   expect(result).toEqual({ removed: [], kept: ['1111.json'] })
 })
 
-test('sweepStale は heartbeat のファイルを消す', () => {
+test('sweepStale は heartbeat のファイルに何もしない', () => {
   mkdirSync(sessionDir(), { recursive: true })
   const name = `1111.${RUN}.heartbeat`
   writeFileSync(join(sessionDir(), name), JSON.stringify({ run_id: RUN, written_at: WRITTEN }))
-  const result = sweepStale(4321, fakeLookup({}).lookup)
-  expect(result.removed).toEqual([name])
-  expect(existsSync(join(sessionDir(), name))).toBe(false)
+  const f = fakeLookup({ 1111: { kind: 'missing' } })
+  expect(sweepStale(4321, f.lookup)).toEqual({ removed: [], kept: [] })
+  expect(f.asked).toEqual([])
+  expect(existsSync(join(sessionDir(), name))).toBe(true)
 })
 
 test('sweepStale は規約外の名前のファイルを触らない', () => {

@@ -1,9 +1,9 @@
 import { join } from 'path'
-import { readFileSync, existsSync, mkdirSync, appendFileSync } from 'fs'
+import { mkdirSync, appendFileSync } from 'fs'
 import { ownerContext } from './routing'
 import { stateDir } from './state-dir'
 
-// 担当名と認証情報とログの共通ユーティリティ ---
+// 担当名とログの共通ユーティリティ ---
 
 // デバッグログ基盤
 // DISCORD_NOTIFY_DEBUG 設定時のみ stateDir()/logs/watch-<owner>.log へ追記する
@@ -17,21 +17,6 @@ export function debugLog(msg: string): void {
     appendFileSync(logFile, `[${new Date().toISOString()}] ${msg}\n`, { mode: 0o600 })
   } catch {
     // ログ失敗は無視する
-  }
-}
-
-// ボットトークンは環境変数を優先し なければ .env ファイルから読む
-// readFileSync は TOCTOU で throw しうるため try/catch で包み null フォールバックにする
-export function botToken(): string | null {
-  if (process.env.DISCORD_BOT_TOKEN) return process.env.DISCORD_BOT_TOKEN
-  const envf = join(stateDir(), '.env')
-  if (!existsSync(envf)) return null
-  try {
-    const m = readFileSync(envf, 'utf8').match(/^DISCORD_BOT_TOKEN=(.*)$/m)
-    // 値が引用符で囲まれている場合は除去する
-    return m ? m[1].trim().replace(/^["']|["']$/g, '') : null
-  } catch {
-    return null
   }
 }
 

@@ -1,8 +1,8 @@
 import { join } from 'path'
 
 // 識別子の形式検証 ---
-// REST の URL やファイル名に埋める値は 埋める直前にここで検証する
-// 検証を通らない値は 通知の破棄 / isError 応答 / 該当操作の中止として扱い REST もファイル操作も行わない
+// ファイル名に埋める値と判定に使う値は 使う直前にここで検証する
+// 検証を通らない値は 通知の破棄か該当操作の中止として扱い ファイル操作を行わない
 
 // Discord snowflake (17 桁から 20 桁の数字列)
 export function isSnowflake(v: unknown): v is string {
@@ -24,7 +24,7 @@ export function isSessionId(v: unknown): v is string {
   return typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)
 }
 
-// run_id と activation_id (小文字 16 進 32 文字)
+// activation_id (小文字 16 進 32 文字)
 export function isHex32(v: unknown): v is string {
   return typeof v === 'string' && /^[0-9a-f]{32}$/.test(v)
 }

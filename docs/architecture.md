@@ -640,15 +640,19 @@ cc-discord は、取り込むまで更新されないため、取り込む時期
   同じディレクトリ、その中のディレクトリ、それを含むディレクトリを、重なりとみなします。
   リンクは解決してから比べ、Windows では大文字と小文字を区別しません。
 
-書き込みは、次の順に行います。
+`merge` は、次の順に進みます。
 
-1. `upstream/discord.tmp/` を作り、その中に新版の写しを用意します。
-   用意に失敗したときは、`upstream/discord.tmp/` を消して終わるため、何も変わりません。
-2. `plugin/` に結果を書き、`plugin/upstream.json` を更新します。
-3. 旧版の `upstream/discord/` を `upstream/discord.tmp/` の中へ rename で退避し、新版の写しを `upstream/discord/` へ rename してから、`upstream/discord.tmp/` を消します。
+1. 取り込み元が重なっていないかを、元のパスで確認します。
+2. `upstream/discord.tmp/` を作り、取り込み元を `node_modules` と `.git` を除いて写します。
+   版の読み取り、新しく現れたファイルの検出、マージ、`bun.lock` とハッシュの読み取り、次の基準の版の用意は、すべてこの写しから行います。
+   写しの作成からここまでに失敗したときは、作った `upstream/discord.tmp/` を消して終わるため、何も変わりません。
+3. `plugin/` に結果を書き、`plugin/upstream.json` を更新します。
+4. 旧版の `upstream/discord/` を `upstream/discord.tmp/` の中へ rename で退避し、次の基準の版を `upstream/discord/` へ rename してから、`upstream/discord.tmp/` を消します。
 
-基準の版を最後に入れ替えるのは、2 の途中で失敗しても、取り込む前の基準の版を残すためです。
-ただし、2 と 3 の途中で I/O が失敗すると、部分的に変更されたまま終わることがあります。
+取り込み元を最初に写すのは、取り込みの途中で公式 marketplace のクローンが更新されても、`plugin/`、`upstream/discord/`、`plugin/upstream.json` を、取り込みを始めた時点の同じ版にそろえるためです。
+取り込み元を別々の時点で読むと、`plugin/` は古い版のまま基準の版だけが新しい版になり、やり直しても新しい変更が `plugin/` に入りません。
+基準の版を最後に入れ替えるのは、3 の途中で失敗しても、取り込む前の基準の版を残すためです。
+ただし、3 と 4 の途中で I/O が失敗すると、部分的に変更されたまま終わることがあります。
 取り込みは作業ブランチで行うので、`git status` で変更を確認し、`git checkout` で戻すか、同じ取り込みをやり直します。
 やり直しでは、`plugin/` にすでに書かれた変更が新版の変更と同じになるため、その部分は衝突しません。
 `upstream/discord.tmp/` が残っていると、`merge` は何も変更せずに失敗します。

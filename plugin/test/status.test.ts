@@ -63,6 +63,20 @@ test('buildStatusBlock は末尾でない " context)" は置換しない (誤置
   expect(buildStatusBlock(d, null)).toBe('```\n👾 Has (1M context) trailing text\n```')
 })
 
+test('buildStatusBlock は notice をコードブロックの最終行に足す', () => {
+  expect(buildStatusBlock(fullData, 'main', '', 'upstream 0.0.6')).toBe(
+    '```\n🌿 main\n👾 Fable 5 | 🧠 max\n📊 14% | ⏰ 63% 10:10\n📅 16% 6/14 3:00\n⬆️ upstream 0.0.6\n```',
+  )
+})
+
+test('buildStatusBlock は notice が null なら足さない', () => {
+  expect(buildStatusBlock(fullData, 'main', '', null)).toBe(buildStatusBlock(fullData, 'main'))
+})
+
+test('buildStatusBlock は notice だけでもブロックを作る', () => {
+  expect(buildStatusBlock({}, null, '', 'upstream 0.0.6')).toBe('```\n⬆️ upstream 0.0.6\n```')
+})
+
 test('readBranch は ref 形式の HEAD からブランチ名を読む', () => {
   const dir = mkdtempSync(join(tmpdir(), 'status-test-'))
   mkdirSync(join(dir, '.git'))

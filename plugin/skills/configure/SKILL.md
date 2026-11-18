@@ -10,6 +10,8 @@ allowed-tools:
   - Bash(chmod 600 *)
 ---
 
+<!-- このファイルは、anthropics/claude-plugins-official の external_plugins/discord/skills/configure/SKILL.md を改変したものです。改変箇所は、リポジトリの upstream/discord/skills/configure/SKILL.md との差分で確認できます。 -->
+
 # /cc-discord:configure — Discord Channel Setup
 
 Writes the bot token to `~/.claude/channels/discord/.env` and orients the

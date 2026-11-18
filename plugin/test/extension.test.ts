@@ -560,3 +560,19 @@ test('footer は採用したポインタの transcript のモデルと 上流の
   expect(footer).toContain('👾 Opus 5.5')
   expect(footer).toContain('⬆️ upstream 0.0.6')
 })
+
+test('footer は組み立てで例外が出たらログに残して空文字を返す', async () => {
+  const env = ownerEnv('eagle')
+  // 上流のクローンの場所を引く時点で例外を投げる
+  Object.defineProperty(env, 'CLAUDE_CONFIG_DIR', {
+    enumerable: true,
+    get() {
+      throw new Error('footer boom')
+    },
+  })
+  const w = setup({ env, pluginDir: join(testTmpDir, 'plugin') })
+  expect(await w.ext.footer()).toBe('')
+  expect(w.logs.filter((l) => l.includes('footer boom'))).toEqual([
+    '[footer] building the footer failed: Error: footer boom',
+  ])
+})

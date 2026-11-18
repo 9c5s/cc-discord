@@ -257,14 +257,20 @@ export function createExtension(deps: {
       typing.stop(chatId)
     },
 
+    // 失敗はログに残して空文字を返し reply の本文の送信を止めない
     async footer(): Promise<string> {
-      return buildFooter({
-        transcriptPath: activation()?.transcript_path ?? null,
-        ownerDir: ownerCtx.kind === 'none' ? null : ownerCtx.dir,
-        usage: await currentUsage(),
-        notice: pluginDir ? upstreamNotice({ env, pluginDir, cloneDir: defaultCloneDir(env) }) : null,
-        env,
-      })
+      try {
+        return buildFooter({
+          transcriptPath: activation()?.transcript_path ?? null,
+          ownerDir: ownerCtx.kind === 'none' ? null : ownerCtx.dir,
+          usage: await currentUsage(),
+          notice: pluginDir ? upstreamNotice({ env, pluginDir, cloneDir: defaultCloneDir(env) }) : null,
+          env,
+        })
+      } catch (e) {
+        log(`[footer] building the footer failed: ${e}`)
+        return ''
+      }
     },
 
     start(): void {

@@ -80,8 +80,9 @@ content 全体から mention を解析するため、コード装飾の内側か
 
 ### 対処: 全送信経路で allowed_mentions を無効化
 
-- `src/discord-ops.ts` (進捗とアンカーの投稿): 投稿に `allowed_mentions: { parse: [] }` を指定
-- `server.ts` (reply / edit_message): 同じく `allowedMentions: { parse: [] }` を指定 (docs/architecture.md)
+- `src/discord-ops.ts` (アンカーの投稿): discord.js の `allowedMentions: { parse: [] }` を指定
+- `src/discord-ops.ts` (進捗の投稿): REST の body に `allowed_mentions: { parse: [] }` を指定
+- `server.ts` (reply / edit_message): discord.js の `allowedMentions: { parse: [] }` を指定 (docs/architecture.md)
 
 これで content に `<@id>` や `@everyone` が含まれても ping は発生しない。なお Discord API 仕様により
 `allowed_mentions` オブジェクトを指定すると `replied_user` も既定 false になるため、引用 reply の相手 ping も

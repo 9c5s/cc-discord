@@ -76,7 +76,7 @@ export type Timers = {
   clearTimeout: (handle: unknown) => void
 }
 
-const nodeTimers: Timers = {
+export const nodeTimers: Timers = {
   setInterval: (fn, ms) => {
     const h = setInterval(fn, ms)
     h.unref?.()

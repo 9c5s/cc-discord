@@ -4,28 +4,21 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import {
   buildFooter,
-  contextWindow,
   modelDisplayName,
   readLastAssistantEntry,
   readTranscriptTail,
 } from '../src/footer'
 
 const testTmpDir = join(tmpdir(), `discord-footer-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`)
-let savedConfigDir: string | undefined
 let savedEffort: string | undefined
 
 beforeEach(() => {
-  savedConfigDir = process.env.CLAUDE_CONFIG_DIR
   savedEffort = process.env.CLAUDE_EFFORT
   delete process.env.CLAUDE_EFFORT
-  process.env.CLAUDE_CONFIG_DIR = join(testTmpDir, 'config')
-  mkdirSync(process.env.CLAUDE_CONFIG_DIR, { recursive: true })
 })
 
 afterEach(() => {
   rmSync(testTmpDir, { recursive: true, force: true })
-  if (savedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
-  else process.env.CLAUDE_CONFIG_DIR = savedConfigDir
   if (savedEffort === undefined) delete process.env.CLAUDE_EFFORT
   else process.env.CLAUDE_EFFORT = savedEffort
 })
@@ -137,63 +130,6 @@ test('modelDisplayName は規約外の id をそのまま使う', () => {
   expect(modelDisplayName('gpt-9')).toBe('gpt-9')
 })
 
-// --- contextWindow ---
-
-function writeSettings(dir: string, name: string, model: unknown): void {
-  mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, name), JSON.stringify(model === undefined ? {} : { model }))
-}
-
-// 1M を標準で持たない世代の代表
-const LEGACY_MODEL = 'claude-opus-4-6'
-
-test('contextWindow は 1M を標準で持つモデルなら settings の [1m] が無くても 1M を返す', () => {
-  const ownerDir = join(testTmpDir, 'proj')
-  writeSettings(join(ownerDir, '.claude'), 'settings.json', 'opus')
-  for (const id of ['claude-opus-5-5', 'claude-opus-4-7', 'claude-sonnet-5', 'claude-fable-5-1']) {
-    expect(contextWindow(id, ownerDir)).toBe(1_000_000)
-  }
-})
-
-test('contextWindow は 4.6 以前の Claude 4 で [1m] が無ければ 200K を返す', () => {
-  const ownerDir = join(testTmpDir, 'proj')
-  writeSettings(join(ownerDir, '.claude'), 'settings.json', 'opus')
-  for (const id of ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'claude-opus-4-20250514']) {
-    expect(contextWindow(id, ownerDir)).toBe(200_000)
-  }
-})
-
-test('contextWindow は 4.6 以前の Claude 4 でも model に [1m] があれば 1M を返す', () => {
-  const ownerDir = join(testTmpDir, 'proj')
-  writeSettings(join(ownerDir, '.claude'), 'settings.json', 'opus[1m]')
-  expect(contextWindow(LEGACY_MODEL, ownerDir)).toBe(1_000_000)
-})
-
-test('contextWindow は local を project より優先する', () => {
-  const ownerDir = join(testTmpDir, 'proj')
-  writeSettings(join(ownerDir, '.claude'), 'settings.local.json', 'sonnet')
-  writeSettings(join(ownerDir, '.claude'), 'settings.json', 'opus[1m]')
-  expect(contextWindow(LEGACY_MODEL, ownerDir)).toBe(200_000)
-})
-
-test('contextWindow は project を user より優先する', () => {
-  const ownerDir = join(testTmpDir, 'proj')
-  writeSettings(join(ownerDir, '.claude'), 'settings.json', 'sonnet')
-  writeSettings(process.env.CLAUDE_CONFIG_DIR as string, 'settings.json', 'opus[1m]')
-  expect(contextWindow(LEGACY_MODEL, ownerDir)).toBe(200_000)
-})
-
-test('contextWindow は model を持たない設定を飛ばして次を見る', () => {
-  const ownerDir = join(testTmpDir, 'proj')
-  writeSettings(join(ownerDir, '.claude'), 'settings.local.json', undefined)
-  writeSettings(process.env.CLAUDE_CONFIG_DIR as string, 'settings.json', 'opus[1m]')
-  expect(contextWindow(LEGACY_MODEL, ownerDir)).toBe(1_000_000)
-})
-
-test('contextWindow は設定が無ければ 4.6 以前の Claude 4 に 200K を返す', () => {
-  expect(contextWindow(LEGACY_MODEL, join(testTmpDir, 'absent'))).toBe(200_000)
-})
-
 // --- buildFooter ---
 
 const USAGE = {
@@ -204,10 +140,8 @@ const USAGE = {
 
 test('buildFooter はモデルと ctx と 5h と 7d を含むブロックを作る', () => {
   const ownerDir = join(testTmpDir, 'proj')
-  writeSettings(join(ownerDir, '.claude'), 'settings.json', 'opus[1m]')
   const p = tmpFile('t.jsonl', `${assistantLine()}\n`)
   const footer = buildFooter({ transcriptPath: p, ownerDir, usage: USAGE })
-  // 1M かどうかは ctx% の分母にだけ効かせ 表示名には出さない
   expect(footer).toContain('👾 Opus 5 | 🧠 high')
   // 1000 / 1_000_000 = 0.1% -> 切り捨てて 0%
   expect(footer).toContain('📊 0%')
@@ -215,22 +149,8 @@ test('buildFooter はモデルと ctx と 5h と 7d を含むブロックを作�
   expect(footer).toContain('📅 51%(88%)')
 })
 
-test('buildFooter は ctx% を切り捨てで計算する', () => {
+test('buildFooter は ctx% を 1M で割って切り捨てる', () => {
   const ownerDir = join(testTmpDir, 'proj')
-  const line = assistantLine({
-    message: {
-      model: LEGACY_MODEL,
-      usage: { input_tokens: 100_000, cache_creation_input_tokens: 50_000, cache_read_input_tokens: 9_999 },
-    },
-  })
-  const p = tmpFile('t.jsonl', `${line}\n`)
-  // 159999 / 200000 = 79.99% -> 79%
-  expect(buildFooter({ transcriptPath: p, ownerDir, usage: USAGE })).toContain('📊 79%')
-})
-
-test('buildFooter は 1M を標準で持つモデルの ctx% を 1M で割る', () => {
-  const ownerDir = join(testTmpDir, 'proj')
-  writeSettings(join(ownerDir, '.claude'), 'settings.json', 'opus')
   const line = assistantLine({
     message: {
       model: 'claude-opus-5-5',

@@ -1,6 +1,4 @@
-import { closeSync, fstatSync, openSync, readFileSync, readSync } from 'fs'
-import { homedir } from 'os'
-import { join } from 'path'
+import { closeSync, fstatSync, openSync, readSync } from 'fs'
 import { buildStatusBlock, modelUsageSuffix, readBranch } from './status'
 import type { UsageSnapshot } from './usage'
 
@@ -10,10 +8,8 @@ import type { UsageSnapshot } from './usage'
 
 // transcript は末尾だけ読む (長い会話でも一定コストにする)
 const TAIL_BYTES = 512 * 1024
-const LEGACY_CONTEXT_WINDOW = 200_000
-const ONE_MILLION_CONTEXT_WINDOW = 1_000_000
-// 1M を標準で持たない世代 (Claude 4 系の 4.6 以前)
-const LEGACY_MODEL_ID = /^claude-(opus|sonnet|haiku)-4(-[0-6])?(-\d{8})?$/
+// ctx% の分母とする context window
+const CONTEXT_WINDOW = 1_000_000
 
 type J = Record<string, unknown>
 const obj = (v: unknown): J | null => (typeof v === 'object' && v !== null ? (v as J) : null)
@@ -89,34 +85,6 @@ export function modelDisplayName(modelId: string): string {
   return `${family} ${m[3] ? `${m[2]}.${m[3]}` : m[2]}`
 }
 
-// settings の model を local -> project -> user の順に探す
-// 最初に見つかった値を採用する (見つからなければ null)
-function settingsModel(ownerDir: string | null): string | null {
-  const files: string[] = []
-  if (ownerDir) {
-    files.push(join(ownerDir, '.claude', 'settings.local.json'))
-    files.push(join(ownerDir, '.claude', 'settings.json'))
-  }
-  files.push(join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'settings.json'))
-  for (const f of files) {
-    try {
-      const model = obj(JSON.parse(readFileSync(f, 'utf8')))?.model
-      if (typeof model === 'string' && model) return model
-    } catch {
-      // 読めない設定は無いものとして次を見る
-    }
-  }
-  return null
-}
-
-// context window を transcript のモデル id と settings の model から決める
-// 4.6 以前の世代だけ settings の [1m] を見て それ以外は 1M とする
-// --model の CLI 指定は proxy から読めないため 4.6 以前をその形で 1M にした場合は実際と異なる (既知の制限)
-export function contextWindow(modelId: string, ownerDir: string | null): number {
-  if (!LEGACY_MODEL_ID.test(modelId)) return ONE_MILLION_CONTEXT_WINDOW
-  return settingsModel(ownerDir)?.endsWith('[1m]') ? ONE_MILLION_CONTEXT_WINDOW : LEGACY_CONTEXT_WINDOW
-}
-
 // footer を組み立てる
 // 全要素が欠けたら空文字を返し 呼び出し側が付与をスキップする
 export function buildFooter(input: {
@@ -130,12 +98,11 @@ export function buildFooter(input: {
 
   const data: J = {}
   if (entry) {
-    const window = contextWindow(entry.model, input.ownerDir)
     data.model = { display_name: modelDisplayName(entry.model) }
     // effort はモデル名と同じ行にしか出ないため モデルが取れないときは effort も出ない
     const effort = entry.effort ?? env.CLAUDE_EFFORT
     if (effort) data.effort = { level: effort }
-    data.context_window = { used_percentage: Math.floor((entry.tokens / window) * 100) }
+    data.context_window = { used_percentage: Math.floor((entry.tokens / CONTEXT_WINDOW) * 100) }
   }
   const rateLimits: J = {}
   if (input.usage.session) rateLimits.five_hour = input.usage.session

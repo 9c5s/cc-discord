@@ -1,7 +1,7 @@
 import { closeSync, mkdirSync, openSync, readdirSync, rmSync, statSync } from 'fs'
-import type { DiscordClient } from './discord-api'
+import { join } from 'path'
 import { isOwnerName, isSnowflake, resolveInDir } from './ids'
-import { progressDir } from './progress-target'
+import { stateDir } from './state-dir'
 import { threadName } from './summarize'
 
 // inbound の排他と typing と進捗スレッド ---
@@ -17,10 +17,10 @@ const LOCK_MAX_AGE_MS = 12 * 60 * 60 * 1000
 const TYPING_RESEND_MS = 8_000
 // 応答が返らないまま typing が残り続けないための安全弁
 const TYPING_MAX_MS = 10 * 60_000
-// 通知を出さない投稿 (SUPPRESS_NOTIFICATIONS)
-const SUPPRESS_NOTIFICATIONS = 1 << 12
-// スレッドのアンカーに使う可視文字の無い 1 文字 (ZWSP)
-const ANCHOR_TEXT = '​'
+
+export function progressDir(): string {
+  return join(stateDir(), 'progress-thread')
+}
 
 function lockPath(owner: string, messageId: string): string | null {
   if (!isOwnerName(owner) || !isSnowflake(messageId)) return null
@@ -99,16 +99,14 @@ export type TypingController = {
 }
 
 export function createTypingController(
-  api: DiscordClient,
+  sendTyping: (chatId: string) => Promise<void>,
   opts: { timers?: Timers; onError?: (message: string) => void } = {},
 ): TypingController {
   const timers = opts.timers ?? nodeTimers
   const active = new Map<string, { interval: unknown; guard: unknown }>()
 
   const send = (chatId: string): void => {
-    void api.sendTyping(chatId).then((res) => {
-      if (!res.ok) opts.onError?.(`typing failed chat=${chatId}: ${res.error}`)
-    })
+    sendTyping(chatId).catch((e: unknown) => opts.onError?.(`typing failed chat=${chatId}: ${e}`))
   }
 
   const stop = (chatId: string): void => {
@@ -138,28 +136,29 @@ export function createTypingController(
 
 export type TargetLocation = { id: string; parent: string; kind: 'guild' | 'dm' }
 
+// スレッドの作成に使う Discord の操作 (失敗は null で返す)
+export type ThreadOps = {
+  // アンカーを投稿してそのメッセージ id を返す
+  postAnchor(chatId: string): Promise<string | null>
+  // アンカーから public スレッドを立ててその id を返す
+  startThread(chatId: string, anchorId: string, name: string): Promise<string | null>
+}
+
 // inbound の宛先を決める
 // DM とスレッド内の inbound はその場を宛先にし GuildText ではアンカーを投稿してスレッドを作る
 // アンカーやスレッドの作成に失敗したら親チャンネルへ退避する (進捗の喪失より配送を優先する)
 export async function createProgressTarget(
-  api: DiscordClient,
+  ops: ThreadOps,
   input: { chatId: string; kind: 'guild' | 'dm'; parentId: string; content: string; ts: Date },
 ): Promise<TargetLocation> {
   const { chatId, kind, parentId } = input
   if (kind === 'dm') return { id: chatId, parent: chatId, kind: 'dm' }
   if (chatId !== parentId) return { id: chatId, parent: parentId, kind: 'guild' }
 
-  const anchor = await api.createMessage(chatId, {
-    content: ANCHOR_TEXT,
-    flags: SUPPRESS_NOTIFICATIONS,
-    allowed_mentions: { parse: [] },
-  })
-  if (!anchor.ok) return { id: chatId, parent: chatId, kind: 'guild' }
+  const anchorId = await ops.postAnchor(chatId)
+  if (anchorId === null) return { id: chatId, parent: chatId, kind: 'guild' }
 
-  const thread = await api.startThread(chatId, anchor.value.id, {
-    name: threadName(input.content, input.ts),
-    auto_archive_duration: 60,
-  })
-  if (!thread.ok) return { id: chatId, parent: chatId, kind: 'guild' }
-  return { id: thread.value.id, parent: chatId, kind: 'guild' }
+  const threadId = await ops.startThread(chatId, anchorId, threadName(input.content, input.ts))
+  if (threadId === null) return { id: chatId, parent: chatId, kind: 'guild' }
+  return { id: threadId, parent: chatId, kind: 'guild' }
 }

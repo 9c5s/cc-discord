@@ -1,7 +1,5 @@
 #!/usr/bin/env bun
-import { spawn } from 'child_process'
 import { randomBytes } from 'crypto'
-import { join } from 'path'
 import {
   deletePointer,
   readPointer,
@@ -10,19 +8,19 @@ import {
   type ActivationSource,
   type Pointer,
 } from './activation'
-import { isHex32, isPid, isSessionId } from './ids'
+import { isPid, isSessionId } from './ids'
 import { debugLog } from './notify'
+import { lookupProcess } from './process-tree'
 
 // SessionStart hook ---
 // 1 回の SessionStart で始まる期間を activation と呼び このプロセスの現行 activation をポインタに書く
 // compaction は同じ作業の継続なので activation を変えず 進捗の宛先を切らない
-// 失敗は「漏洩ではなく欠落」の側に寄せる (旧ポインタを削除してから新ポインタを書く)
+// 失敗したときは漏洩より欠落になる順序を選ぶ (旧ポインタを削除してから新ポインタを書く)
 
 const SOURCES: ActivationSource[] = ['startup', 'resume', 'clear', 'compact', 'fork']
 
 export type StartInput = {
   claudePid: number
-  runId: string | null
   sessionId: string
   transcriptPath: string
   source: ActivationSource
@@ -45,12 +43,8 @@ export function parseSessionStart(raw: string, env: NodeJS.ProcessEnv): StartInp
   if (typeof v.transcript_path !== 'string' || !v.transcript_path) return null
   if (!SOURCES.includes(v.source as ActivationSource)) return null
 
-  // 形式の合わない run_id は持たないものとして扱う
-  // そのまま通すと watcher の引数検証で弾かれ 進捗の転送が理由の分からないまま止まる
-  const runId = env.CC_DISCORD_RUN_ID
   const input: StartInput = {
     claudePid: Number(pid),
-    runId: isHex32(runId) ? runId : null,
     sessionId: v.session_id,
     transcriptPath: v.transcript_path,
     source: v.source as ActivationSource,
@@ -60,11 +54,11 @@ export function parseSessionStart(raw: string, env: NodeJS.ProcessEnv): StartInp
 }
 
 // 新しいポインタの内容と activation を新規に起こすかを決める
-// compact で run_id と session_id が一致するときだけ activation_id を維持する
+// compact で session_id が一致するときだけ activation_id を維持する
 export function planActivation(input: {
   existing: Pointer | null
   claudePid: number
-  runId: string | null
+  claudeStartedAt: number | null
   sessionId: string
   transcriptPath: string
   source: ActivationSource
@@ -73,34 +67,31 @@ export function planActivation(input: {
   newActivationId: () => string
 }): { pointer: Pointer; isNew: boolean } {
   const { existing } = input
-  const keep =
-    input.source === 'compact' &&
-    existing !== null &&
-    existing.run_id === input.runId &&
-    existing.session_id === input.sessionId
+  const keep = input.source === 'compact' && existing !== null && existing.session_id === input.sessionId
 
   const pointer: Pointer = {
     claude_pid: input.claudePid,
-    run_id: input.runId,
     session_id: input.sessionId,
     activation_id: keep ? (existing as Pointer).activation_id : input.newActivationId(),
     transcript_path: input.transcriptPath,
     source: input.source,
     written_at: input.now,
   }
+  if (input.claudeStartedAt !== null) pointer.claude_started_at = input.claudeStartedAt
   if (input.model !== undefined) pointer.model = input.model
   return { pointer, isNew: !keep }
 }
 
 export type StartDeps = {
-  spawnWatcher: (args: string[]) => void
   sweep: () => void
+  // Claude Code のプロセスの作成時刻 (epoch ミリ秒) を返す 取得できなければ null
+  startedAt: (pid: number) => number | null
   newActivationId?: () => string
   now?: () => number
   log?: (msg: string) => void
 }
 
-// ポインタを置き換えて watcher を起動する
+// ポインタを置き換えてから古いポインタを掃除する
 // 新しい activation では 旧ポインタを削除してから書き 削除の結果に関わらず置換を試みる
 // 削除できて書き込めなかった場合は旧 activation が非現行になり 新 activation の進捗が欠落する
 // 両方失敗した場合だけ旧ポインタが残る (受容リスク)
@@ -110,41 +101,21 @@ export function runSessionStart(input: StartInput, deps: StartDeps): void {
   const log = deps.log ?? debugLog
 
   const existing = readPointer(input.claudePid)
-  const plan = planActivation({ ...input, existing, now: now(), newActivationId })
+  const claudeStartedAt = deps.startedAt(input.claudePid)
+  const plan = planActivation({ ...input, claudeStartedAt, existing, now: now(), newActivationId })
 
   if (plan.isNew && existing !== null && !deletePointer(input.claudePid)) {
     log('[session-start] failed to delete the previous pointer')
   }
-  const written = writePointer(plan.pointer)
-  if (!written) log('[session-start] failed to write the pointer')
+  if (!writePointer(plan.pointer)) log('[session-start] failed to write the pointer')
 
   // 掃除はポインタの置き換えの後に行う (自分の PID のポインタは対象にしない)
   deps.sweep()
-
-  // 新しい activation を起こしたときだけ watcher を起動する
-  // run_id が無いプロセスでは進捗転送を行わない (既存の watcher はポインタの変化で自律終了する)
-  if (!written || !plan.isNew || !input.runId) return
-  deps.spawnWatcher([
-    input.transcriptPath,
-    input.sessionId,
-    String(input.claudePid),
-    input.runId,
-    plan.pointer.activation_id,
-  ])
 }
 
-// watcher を detached で起動する
-function spawnWatcher(args: string[]): void {
-  try {
-    const child = spawn(process.execPath, [join(import.meta.dir, 'watch.ts'), ...args], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    })
-    child.unref()
-  } catch (e) {
-    debugLog(`[session-start] failed to spawn the watcher: ${e}`)
-  }
+function startedAt(pid: number): number | null {
+  const r = lookupProcess(pid)
+  return r.kind === 'found' ? r.info.startMs : null
 }
 
 if (import.meta.main) {
@@ -152,8 +123,8 @@ if (import.meta.main) {
   const input = parseSessionStart(raw, process.env)
   if (input) {
     runSessionStart(input, {
-      spawnWatcher,
       sweep: () => sweepStale(input.claudePid),
+      startedAt,
     })
   }
 }

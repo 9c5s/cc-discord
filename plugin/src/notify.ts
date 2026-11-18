@@ -4,8 +4,6 @@ import { ownerContext } from './routing'
 import { stateDir } from './state-dir'
 
 // 担当名と認証情報とログの共通ユーティリティ ---
-// proxy / hook / watcher が共用する
-// 進捗の送信は progress-sender.ts 宛先の管理は progress-target.ts が担う
 
 // デバッグログ基盤
 // DISCORD_NOTIFY_DEBUG 設定時のみ stateDir()/logs/watch-<owner>.log へ追記する

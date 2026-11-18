@@ -93,7 +93,7 @@ const client = new Client({
   // DMs arrive as partial channels — messageCreate never fires without this.
   partials: [Partials.Channel],
 })
-const ext = createExtension({ ops: createDiscordOps(client, createProgressRest(TOKEN)), loadAccess, pluginDir: import.meta.dir })
+const ext = createExtension({ ops: createDiscordOps(client, createProgressRest(TOKEN), (m) => ext.log(m)), loadAccess, pluginDir: import.meta.dir })
 
 type PendingEntry = {
   senderId: string
@@ -908,7 +908,7 @@ async function handleInbound(msg: Message): Promise<void> {
     return
   }
 
-  // Typing indicator — signals "processing" until we reply (or ~10s elapses).
+  // 担当と鮮度とロックを判定し 扱う inbound だけ typing と進捗スレッドを始める
   if (!(await ext.admitInbound(msg))) return
 
   // Ack reaction — lets the user know we're processing. Fire-and-forget.

@@ -335,6 +335,52 @@ test('archive は setArchived が例外を投げたら false を返す', async (
   expect(await createDiscordOps(fakeClient({ fetched: { [THREAD]: thread } }), noRest).archive(THREAD)).toBe(false)
 })
 
+// --- 失敗のログ ---
+
+test('操作が失敗したら操作の名前と例外の内容をログに 1 行ずつ残す', async () => {
+  const logs: string[] = []
+  const ops = createDiscordOps(
+    fakeClient({
+      fetched: {
+        [OWNER_CH]: {
+          send: async () => {
+            throw new Error('Missing Permissions')
+          },
+          messages: {
+            fetch: async () => {
+              throw new Error('Unknown Message')
+            },
+          },
+        },
+      },
+    }),
+    noRest,
+    (m) => logs.push(m),
+  )
+  expect(await ops.postAnchor(OWNER_CH)).toBeNull()
+  expect(await ops.startThread(OWNER_CH, ANCHOR, '[01/01 00:00] build it')).toBeNull()
+  expect(logs).toEqual([
+    '[discord] postAnchor failed: Error: Missing Permissions',
+    '[discord] startThread failed: Error: Unknown Message',
+  ])
+})
+
+test('postProgress の失敗は例外の内容をログに残し 成功はログに残さない', async () => {
+  let failing = true
+  const logs: string[] = []
+  const rest: ProgressRest = {
+    post: async () => {
+      if (failing) throw new Error('500 Internal Server Error')
+      return { id: LAST_MESSAGE }
+    },
+  }
+  const ops = createDiscordOps(fakeClient(), rest, (m) => logs.push(m))
+  expect(await ops.postProgress(THREAD, 'x')).toStrictEqual({ ok: false })
+  failing = false
+  expect(await ops.postProgress(THREAD, 'x')).toEqual({ ok: true })
+  expect(logs).toEqual(['[discord] postProgress failed: Error: 500 Internal Server Error'])
+})
+
 // --- 進捗用の REST クライアント ---
 
 test('createProgressRest は api の送り先へトークン付きで POST する', async () => {

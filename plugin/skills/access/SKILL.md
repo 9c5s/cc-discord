@@ -9,6 +9,8 @@ allowed-tools:
   - Bash(mkdir *)
 ---
 
+<!-- このファイルは、anthropics/claude-plugins-official の external_plugins/discord/skills/access/SKILL.md を改変したものです。改変箇所は、リポジトリの upstream/discord/skills/access/SKILL.md との差分で確認できます。 -->
+
 # /cc-discord:access — Discord Channel Access Management
 
 **This skill only acts on requests typed by the user in their terminal

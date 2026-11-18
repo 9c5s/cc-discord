@@ -2,5 +2,6 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "cc-discord",
   "author": { "name": "9c5s" },
-  "description": "公式 discord channel plugin を無改変のまま透過プロキシで拡張する"
+  "description": "公式 discord channel plugin を改変し、複数セッションの担当分けと進捗スレッドを加えたもの",
+  "license": "Apache-2.0"
 }

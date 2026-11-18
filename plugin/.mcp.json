@@ -2,7 +2,7 @@
   "mcpServers": {
     "discord": {
       "command": "bun",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/src/proxy.ts"]
+      "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}", "--shell=bun", "--silent", "start"]
     }
   }
 }

@@ -135,8 +135,8 @@ test('新しい transcript がまだ無くても止まらず 作られた後の�
   env.pointer = pointer(ACT_B, b)
   fw.tick()
   await expect(fw.poll()).resolves.toBeUndefined()
-  writeFileSync(b, textLine('first'))
   fw.setTarget(target({ activationId: ACT_B }))
+  writeFileSync(b, textLine('first'))
   await fw.poll()
   expect(env.sent).toEqual([[THREAD, '💬 first']])
 })
@@ -278,6 +278,81 @@ test('1 チャンク目の送信を待つ間に同じ宛先のオブジェクト
   expect(env.sent).toEqual([[THREAD, '💬 ' + 'x'.repeat(1000)]])
 })
 
+test('宛先の設定の前に追記されまだ読んでいない行は 新しい宛先へ送らない', async () => {
+  const { env, fw, a } = setupWithTarget()
+  appendFileSync(a, textLine('for the first target'))
+  fw.setTarget(target({ id: THREAD_2, setAt: NOW + 1 }))
+  await fw.poll()
+  expect(env.sent).toEqual([])
+})
+
+test('送信を待つ間に追記された前のやり取りの行は 待つ間に設定された新しい宛先へ送らない', async () => {
+  let release!: () => void
+  const pending = new Promise<SendResult>((r) => {
+    release = () => r({ ok: true })
+  })
+  let calls = 0
+  const { env, fw, a } = setupWithTarget({
+    send: () => (calls++ === 0 ? pending : Promise.resolve({ ok: true })),
+  })
+  appendFileSync(a, textLine('first'))
+  const polling = fw.poll()
+  appendFileSync(a, textLine('late for the first target'))
+  fw.setTarget(target({ id: THREAD_2, setAt: NOW + 1 }))
+  release()
+  await polling
+  await fw.poll()
+  expect(env.sent).toEqual([[THREAD, '💬 first']])
+})
+
+test('行の途中まで書かれた状態で宛先が設定されたら 残りが書かれてもその行を新しい宛先へ送らない', async () => {
+  const { env, fw, a } = setupWithTarget()
+  const line = textLine('half written')
+  const cut = line.indexOf('half')
+  appendFileSync(a, line.slice(0, cut))
+  await fw.poll()
+  fw.setTarget(target({ id: THREAD_2, setAt: NOW + 1 }))
+  appendFileSync(a, line.slice(cut))
+  await fw.poll()
+  expect(env.sent).toEqual([])
+})
+
+test('宛先を切り替えた後に追記された行は 新しい宛先へ送る', async () => {
+  const { env, fw, a } = setupWithTarget()
+  appendFileSync(a, textLine('for the first target'))
+  await fw.poll()
+  fw.setTarget(target({ id: THREAD_2, setAt: NOW + 1 }))
+  appendFileSync(a, textLine('for the second target'))
+  await fw.poll()
+  expect(env.sent).toEqual([
+    [THREAD, '💬 for the first target'],
+    [THREAD_2, '💬 for the second target'],
+  ])
+})
+
+test('読み取り位置を末尾へ進められなくても宛先は設定し 開き直した transcript の末尾から読む', async () => {
+  const readers: TailReader[] = [
+    {
+      readNewLines: () => [textLine('unread before the target').trimEnd()],
+      skipToEnd: () => {
+        throw new Error('EBUSY: resource busy')
+      },
+    },
+    { readNewLines: () => [textLine('after the target').trimEnd()], skipToEnd: () => {} },
+  ]
+  let opens = 0
+  const { env, fw } = setup({ openReader: () => readers[opens++] })
+  env.pointer = pointer(ACT_A, join(testTmpDir, 'a.jsonl'))
+  fw.tick()
+  expect(() => fw.setTarget(target())).not.toThrow()
+  expect(fw.currentTargetId()).toBe(THREAD)
+  expect(env.logs.some((m) => m.includes('EBUSY'))).toBe(true)
+  fw.tick()
+  await fw.poll()
+  expect(opens).toBe(2)
+  expect(env.sent).toEqual([[THREAD, '💬 after the target']])
+})
+
 test('poll は前回の呼び出しが終わるまで次を始めない', async () => {
   let release!: () => void
   const pending = new Promise<SendResult>((r) => {
@@ -361,6 +436,7 @@ test('transcript の読み取りが例外を投げても poll は止まらず �
       if (reads++ === 0) throw new Error('ENOENT: no such file')
       return [textLine('retried').trimEnd()]
     },
+    skipToEnd: () => {},
   }
   const { env, fw } = setup({ openReader: () => reader })
   env.pointer = pointer(ACT_A, join(testTmpDir, 'a.jsonl'))
@@ -382,6 +458,7 @@ test('transcript を開けなくても tick は止まらず 次の tick で開�
       if (opens === 1) throw new Error('EBUSY: resource busy')
       return {
         readNewLines: () => [textLine('reopened').trimEnd()],
+        skipToEnd: () => {},
       }
     },
   })

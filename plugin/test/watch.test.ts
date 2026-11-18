@@ -188,3 +188,47 @@ test('createTailReader は途中で切れたマルチバイト文字を次回の
   appendFileSync(p, bytes.subarray(2))
   expect(reader.readNewLines()).toEqual(['あ'])
 })
+
+// --- skipToEnd ---
+
+test('skipToEnd はまだ読んでいない行を飛ばし その後に追記された行から読む', () => {
+  const p = transcriptPath()
+  writeFileSync(p, 'old\n')
+  const reader = createTailReader(p)
+  appendFileSync(p, 'unread1\nunread2\n')
+  reader.skipToEnd()
+  expect(reader.readNewLines()).toEqual([])
+  appendFileSync(p, 'after\n')
+  expect(reader.readNewLines()).toEqual(['after'])
+})
+
+test('skipToEnd は持ち越していた行の断片を捨て 残りとつながない', () => {
+  const p = transcriptPath()
+  writeFileSync(p, '')
+  const reader = createTailReader(p)
+  appendFileSync(p, '{"type":')
+  expect(reader.readNewLines()).toEqual([])
+  reader.skipToEnd()
+  appendFileSync(p, '"assistant"}\nnext\n')
+  expect(reader.readNewLines()).toEqual(['"assistant"}', 'next'])
+})
+
+test('skipToEnd は途中で切れたマルチバイト文字の部分バイトを捨てる', () => {
+  const p = transcriptPath()
+  writeFileSync(p, '')
+  const reader = createTailReader(p)
+  const bytes = Buffer.from('あ\n', 'utf8')
+  appendFileSync(p, bytes.subarray(0, 2))
+  expect(reader.readNewLines()).toEqual([])
+  reader.skipToEnd()
+  appendFileSync(p, Buffer.concat([bytes.subarray(2), Buffer.from('x\n')]))
+  expect(reader.readNewLines()).toEqual(['�', 'x'])
+})
+
+test('skipToEnd はファイルが無くても例外を投げず 作られた後に先頭から読む', () => {
+  const p = transcriptPath()
+  const reader = createTailReader(p)
+  expect(() => reader.skipToEnd()).not.toThrow()
+  writeFileSync(p, 'first\n')
+  expect(reader.readNewLines()).toEqual(['first'])
+})

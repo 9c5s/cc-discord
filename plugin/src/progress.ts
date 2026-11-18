@@ -138,6 +138,14 @@ export function createProgressForwarder(deps: {
       }
       // 差し替えを参照の比較で検出するため 設定のたびに新しいオブジェクトにする
       target = { ...t }
+      // 設定までに書かれた前のやり取りの行を新しい宛先へ送らない
+      try {
+        reader?.skipToEnd()
+      } catch (e) {
+        log(`[progress] failed to skip the transcript to the end: ${e}`)
+        // 次の tick で開き直し その時点の末尾から読む
+        reader = null
+      }
     },
 
     currentTargetId: () => (target && isLive(target) ? target.id : null),

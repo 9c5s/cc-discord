@@ -1,0 +1,11 @@
+cc-discord
+
+このプラグインは、公式の discord channel plugin (anthropics/claude-plugins-official の external_plugins/discord) に由来するファイルを含み、それらに改変を加えています。
+
+- 由来: anthropics/claude-plugins-official
+- ライセンス: Apache License, Version 2.0 (全文は LICENSE を参照してください)
+- 著作権: Copyright 2026 Anthropic, PBC
+- 取り込み元の版: upstream.json に記録しています
+
+改変箇所は、リポジトリの upstream/discord/ に置いた素の公式ファイルとの差分で確認できます。
+拡張のロジックを含むプラグイン全体も Apache License, Version 2.0 の下で提供します。

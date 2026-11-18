@@ -1,0 +1,5 @@
+{
+  "source": "anthropics/claude-plugins-official/external_plugins/discord",
+  "version": "0.0.5",
+  "server_sha256": "ee58c9af69d7dc958cfed207d5601205d935c89b4f31182a35ea3b2680f81595"
+}

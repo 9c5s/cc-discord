@@ -405,6 +405,22 @@ test('owned は担当外のチャンネルで例外を投げ 担当チャンネ�
   expect(() => w.ext.owned(dmChannel)).toThrow(DM_CH)
 })
 
+test('owned は cc-discord 担当のセッションに DM のチャンネルを通す', () => {
+  const w = setup({ env: ownerEnv('cc-discord') })
+  expect(w.ext.owned(dmChannel)).toBe(dmChannel)
+})
+
+test('owned は担当名を持たないセッションでは担当外のチャンネルも DM も通す', () => {
+  const w = setup({ env: {} })
+  expect(w.ext.owned(otherChannel)).toBe(otherChannel)
+  expect(w.ext.owned(dmChannel)).toBe(dmChannel)
+})
+
+test('owned は正規化した担当名が空になるセッションでは担当チャンネルも拒む', () => {
+  const w = setup({ env: ownerEnv('___') })
+  expect(() => w.ext.owned(ownerChannel)).toThrow('ROUTING_BROKEN')
+})
+
 // --- 進捗転送 ---
 
 test('進捗の送信は宛先が担当から外れたら送らない', async () => {

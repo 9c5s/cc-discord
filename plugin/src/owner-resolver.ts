@@ -1,18 +1,12 @@
 import type { Access } from './access'
 import type { DiscordClient } from './discord-api'
-import {
-  TARGET_TTL_MS,
-  deleteProgressBody,
-  deleteTarget,
-  listTargets,
-} from './progress-target'
-import { deleteRoute, writeRoute } from './routes'
+import { TARGET_TTL_MS, deleteTarget, listTargets } from './progress-target'
 import { resolveOwnerChannel, type GuildChannels } from './routing'
 
 // 担当チャンネルの解決 ---
 // 60 秒ごとに access.json と guild のチャンネル一覧から担当を決め直す
 // 判定は決定関数 1 つに集約し 候補が複数なら fail closed にする
-// route ファイルの更新と削除は成功するまで再試行するが 安全性はそれに依存しない
+// 担当に紐づく宛先の削除は成功するまで再試行するが 安全性はそれに依存しない
 // (進捗送信も inbound も 実体を見る gate と メモリ上の担当で止まる)
 
 // 解決に成功しないまま担当を保ち続ける上限
@@ -40,35 +34,23 @@ export function createOwnerResolver(deps: {
   let guildId: string | null = null
   // 最後に担当を解決しきれた時刻 (取得失敗が続いたときの打ち切りに使う)
   let lastSuccessAt: number | null = null
-  // ファイルへの反映が失敗した周期を覚え 担当が変わらなくても次の周期で書き直す
+  // 宛先の削除に失敗した周期を覚え 担当が変わらなくても次の周期で消し直す
   let unapplied = false
   let running = false
 
-  // route の更新と 担当に紐づく宛先の削除
-  // 消すのは自分の run の guild 宛先だけである (DM は guild の担当に依存しない)
+  // 担当チャンネル以外を指す 自分の run の guild 宛先を消す
+  // DM は guild の担当に依存しないため残す
   // 並走する他セッションの宛先まで消すと そのセッションの進捗が次の inbound まで止まる
   // 他セッションも同じ REST の結果から同じ判断に至るため こちらから触る必要は無い
-  // 本体 (progress-thread/<owner>) だけは run を区別できないので 担当を失った時点で消す
+  // 担当チャンネルを指す宛先は使用中のものなので残す (MCP だけの再起動の後や 削除を再試行する周期にも現れる)
   // 失敗した周期は未反映として記録し 次の周期で再試行する
-  const applyFiles = (next: string | null, dropTargets: boolean): void => {
+  const releaseTargets = (current: string | null): void => {
     let ok = true
-    if (next === null) {
-      ok = deleteRoute(deps.owner) && ok
-    } else {
-      try {
-        writeRoute(deps.owner, next)
-      } catch (e) {
-        log(`[resolver] failed to write the route: ${e}`)
-        ok = false
-      }
-    }
-    if (dropTargets) {
-      ok = deleteProgressBody(deps.owner) && ok
-      for (const entry of listTargets(deps.owner)) {
-        if (entry.target.kind !== 'guild') continue
-        if (entry.target.run_id !== deps.runId) continue
-        ok = deleteTarget(deps.owner, entry.activationId) && ok
-      }
+    for (const entry of listTargets(deps.owner)) {
+      if (entry.target.kind !== 'guild') continue
+      if (entry.target.run_id !== deps.runId) continue
+      if (entry.target.parent === current) continue
+      ok = deleteTarget(deps.owner, entry.activationId) && ok
     }
     unapplied = !ok
   }
@@ -85,20 +67,15 @@ export function createOwnerResolver(deps: {
     channelId = next
     guildId = nextGuild
 
-    // 担当を持たない間は route も担当に紐づく宛先も残さない (毎周期 冪等に消す)
-    if (next === null) {
-      applyFiles(null, true)
-      return
-    }
-    if (previous === next && !unapplied) return
-    // 宛先を消すのは担当が別チャンネルへ移ったときだけである
-    // 起動直後の確定で消すと 同じ担当で並走する他セッションの宛先まで巻き込む
-    applyFiles(next, previous !== null && previous !== next)
+    // 担当を持たない間は毎周期 冪等に消す
+    // 担当を持つ間は 担当が変わった周期と 前の周期の削除が済んでいない周期にだけ消す
+    if (next !== null && previous === next && !unapplied) return
+    releaseTargets(next)
   }
 
   // 取得に失敗した周期の後始末
   // 猶予の内は前回の担当を据え置き 超えたら手放す
-  // 担当を持たない周期でも 前回のファイル反映が済んでいなければ試し直す
+  // 担当を持たない周期でも 前回の宛先の削除が済んでいなければ試し直す
   const giveUpIfStale = (): void => {
     if (channelId === null) {
       if (unapplied) setOwned(null, null)

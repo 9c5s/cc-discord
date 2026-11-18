@@ -18,7 +18,7 @@ import { isSnowflake } from './ids'
 import { botToken, ownerName } from './notify'
 import { inspectOfficial, officialPluginDir } from './official'
 import { createOwnerResolver } from './owner-resolver'
-import { deleteTarget, writeProgressBody, writeTarget } from './progress-target'
+import { deleteTarget, writeTarget } from './progress-target'
 import { createWriter, readJsonLines, type Json, type Writer } from './relay'
 import { handleEditMessage, handleReply } from './reply'
 import {
@@ -219,7 +219,6 @@ export async function handleServerMessage(msg: Json, raw: string, ctx: ProxyCont
   // 宛先の公開と配送は待ちを挟まずに続けて行う
   // 途中で止まっても 配送されない通知の宛先を watcher に見せない
   if (location && activation) {
-    writeProgressBody(owner, location.id)
     const published = writeTarget(owner, {
       ...location,
       session_id: activation.sessionId,

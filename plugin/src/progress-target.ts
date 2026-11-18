@@ -4,8 +4,7 @@ import { isHex32, isOwnerName, isSessionId, isSnowflake, resolveInDir } from './
 import { stateDir } from './state-dir'
 
 // 進捗の宛先ファイル ---
-// 本体 (progress-thread/<owner>) は素の id 1 行で 旧 notify と旧 archive のためだけに書く
-// 宛先 (progress-thread/<owner>.<activation_id>.meta) は activation 単位で 新 notify と新 archive が読む
+// 宛先 (progress-thread/<owner>.<activation_id>.meta) は activation 単位で notify と archive が読む
 // activation が違えば別ファイルになるため 同じ session_id を別プロセスから同時に resume しても互いを上書きしない
 
 // 宛先の有効期間 (滞留スレッド archive と同じ閾値)
@@ -29,11 +28,6 @@ export function progressDir(): string {
 function targetPath(owner: string, activationId: string): string | null {
   if (!isOwnerName(owner) || !isHex32(activationId)) return null
   return resolveInDir(progressDir(), `${owner}.${activationId}.meta`)
-}
-
-function bodyPath(owner: string): string | null {
-  if (!isOwnerName(owner)) return null
-  return resolveInDir(progressDir(), owner)
 }
 
 // 一時ファイルへ書いてから rename する (途中状態を reader に見せない)
@@ -133,36 +127,4 @@ export function listTargets(owner: string): Array<{ activationId: string; target
     if (t) out.push({ activationId: m[1], target: t })
   }
   return out
-}
-
-// 本体 (旧 reader との契約) ---
-// 旧 notify は progressChannelId() でファイル全体を宛先 id として読む
-// 新 reader は読まないが 移行期間は書き続ける
-
-export function writeProgressBody(owner: string, id: string): boolean {
-  const path = bodyPath(owner)
-  if (!path || !isSnowflake(id)) return false
-  return writeAtomic(path, id)
-}
-
-export function deleteProgressBody(owner: string): boolean {
-  const path = bodyPath(owner)
-  if (!path) return false
-  try {
-    rmSync(path, { force: true })
-    return true
-  } catch {
-    return false
-  }
-}
-
-export function readProgressBody(owner: string): string | null {
-  const path = bodyPath(owner)
-  if (!path) return null
-  try {
-    const v = readFileSync(path, 'utf8').trim()
-    return v || null
-  } catch {
-    return null
-  }
 }

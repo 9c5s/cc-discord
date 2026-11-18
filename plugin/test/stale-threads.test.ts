@@ -1,9 +1,10 @@
-import { test, expect, beforeEach, afterEach } from 'bun:test'
+import { test, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test'
 import { mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { archiveStaleThreads, isStaleThread } from '../src/stale-threads'
-import { readProgressBody, readTarget, writeProgressBody, writeTarget, type ProgressTarget } from '../src/progress-target'
+import * as progressTarget from '../src/progress-target'
+import { readTarget, writeTarget, type ProgressTarget } from '../src/progress-target'
 import type { ApiResult, DiscordClient } from '../src/discord-api'
 
 const testTmpDir = join(tmpdir(), `discord-stale-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`)
@@ -16,6 +17,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  mock.restore()
   rmSync(testTmpDir, { recursive: true, force: true })
   if (savedStateDir === undefined) delete process.env.DISCORD_STATE_DIR
   else process.env.DISCORD_STATE_DIR = savedStateDir
@@ -152,20 +154,13 @@ test('archiveStaleThreads は期限切れの宛先も id が一致すれば消�
   expect(readTarget(OWNER, ACT)).toBe(null)
 })
 
-test('archiveStaleThreads は本体を内容が一致するときだけ消す', async () => {
-  writeProgressBody(OWNER, '44444444444444444')
-  const a = fakeApi([thread()])
-  await archiveStaleThreads(a.api, args)
-  expect(readProgressBody(OWNER)).toBe(null)
-})
-
-test('archiveStaleThreads は別スレッドを指す本体を残す', async () => {
-  writeProgressBody(OWNER, '44444444444444449')
+test('archiveStaleThreads は宛先を消せなかったスレッドを閉じない', async () => {
+  // 宛先が残ったまま閉じると watcher の投稿でスレッドが開き直される
   writeTarget(OWNER, target({ written_at: NOW - 13 * 60 * 60 * 1000 }))
+  spyOn(progressTarget, 'deleteTarget').mockReturnValue(false)
   const a = fakeApi([thread()])
-  await archiveStaleThreads(a.api, args)
-  expect(readProgressBody(OWNER)).toBe('44444444444444449')
-  expect(readTarget(OWNER, ACT)).toBe(null)
+  expect(await archiveStaleThreads(a.api, args)).toEqual([])
+  expect(a.archived).toEqual([])
 })
 
 test('archiveStaleThreads は取得に失敗したら何もしない', async () => {

@@ -79,7 +79,11 @@ export function splitLines(carry: string, chunk: string): { lines: string[]; car
 
 // transcript の増分の読み取り ---
 
-export type TailReader = { readNewLines(): string[] }
+export type TailReader = {
+  readNewLines(): string[]
+  // 読み取り位置を現在の末尾 (ファイルが無ければ先頭) へ進め 持ち越した行の断片と部分バイトを捨てる
+  skipToEnd(): void
+}
 
 // 作成時点の末尾 (ファイルが無ければ先頭) から 追記された完結した行を返す
 // ファイルが縮んだら truncate とみなし 持ち越した行の断片と decoder の部分バイトを捨てて先頭から読み直す
@@ -112,6 +116,12 @@ export function createTailReader(path: string): TailReader {
       const result = splitLines(carry, chunk)
       carry = result.carry
       return result.lines
+    },
+
+    skipToEnd(): void {
+      offset = existsSync(path) ? statSync(path).size : 0
+      carry = ''
+      decoder = new StringDecoder('utf8')
     },
   }
 }

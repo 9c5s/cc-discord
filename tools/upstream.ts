@@ -20,7 +20,7 @@ export const TRACKED_FILES: string[] = [
   'skills/configure/SKILL.md',
 ]
 
-// upstream/discord へ写すだけで plugin へはマージしないファイル
+// マージせず新版を upstream/discord へ写すファイル (bun.lock は plugin へも写す)
 const COPIED_FILES = ['bun.lock', '.claude-plugin/plugin.json']
 
 // 上流の新しいファイルとして報告しないファイル
@@ -131,6 +131,8 @@ export function mergeUpstream(opts: { repoRoot: string; newDir: string; run?: Me
     if (code > 0) conflicts.push(f)
     results.set(f, stdout)
   }
+  const lockfile = join(newDir, 'bun.lock')
+  if (existsSync(lockfile)) results.set('bun.lock', readFileSync(lockfile))
 
   for (const [f, content] of results) {
     const path = join(pluginDir, f)
@@ -166,6 +168,7 @@ function check(repoRoot: string, dir: string): number {
 function merge(repoRoot: string, dir: string): number {
   const { version, conflicts, added } = mergeUpstream({ repoRoot, newDir: dir })
   console.log(`公式 ${version} を取り込みました。`)
+  console.log('plugin ディレクトリで bun install を実行して、bun.lock と依存を整えてください。')
   printList('新しく現れたファイル (取り込むかどうかを判断してください)', added)
   if (conflicts.length === 0) return 0
   printList('衝突したファイル (plugin 側に衝突マーカーを残したので解消してください)', conflicts)

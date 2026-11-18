@@ -139,26 +139,55 @@ test('追跡対象でない新しいファイルを added に挙げる', () => {
   expect(result.added).toEqual(['extra.ts', 'skills/new/SKILL.md'])
 })
 
-test('bun.lock と plugin.json は upstream に写すだけで plugin へは書かない', () => {
+test('bun.lock はマージせず upstream と plugin の両方へ新版を写す', () => {
   seed(SAME)
   write(upstreamDir, 'bun.lock', 'old lock\n')
+  write(pluginDir, 'bun.lock', 'plugin lock\n')
+  write(newDir, 'bun.lock', 'new lock\n')
+  const calls: string[] = []
+
+  mergeUpstream({
+    repoRoot,
+    newDir,
+    run: (ours) => {
+      calls.push(ours)
+      return { code: 0, stdout: 'merged\n' }
+    },
+  })
+
+  expect(read(upstreamDir, 'bun.lock')).toBe('new lock\n')
+  expect(read(pluginDir, 'bun.lock')).toBe('new lock\n')
+  expect(calls).not.toContain(join(pluginDir, 'bun.lock'))
+})
+
+test('plugin に bun.lock が無くても新版を写す', () => {
+  seed(SAME)
   write(newDir, 'bun.lock', 'new lock\n')
 
   mergeUpstream({ repoRoot, newDir, run: cleanRun })
 
-  expect(read(upstreamDir, 'bun.lock')).toBe('new lock\n')
-  expect(read(upstreamDir, '.claude-plugin/plugin.json')).toBe(pluginJson('0.0.6'))
-  expect(existsSync(join(pluginDir, 'bun.lock'))).toBe(false)
-  expect(existsSync(join(pluginDir, '.claude-plugin', 'plugin.json'))).toBe(false)
+  expect(read(pluginDir, 'bun.lock')).toBe('new lock\n')
 })
 
-test('新版に無くなった上流の副産物ファイルは upstream から取り除く', () => {
+test('plugin.json は upstream にだけ写し plugin 自身の manifest を変えない', () => {
+  seed(SAME)
+  write(pluginDir, '.claude-plugin/plugin.json', 'own manifest\n')
+
+  mergeUpstream({ repoRoot, newDir, run: cleanRun })
+
+  expect(read(upstreamDir, '.claude-plugin/plugin.json')).toBe(pluginJson('0.0.6'))
+  expect(read(pluginDir, '.claude-plugin/plugin.json')).toBe('own manifest\n')
+})
+
+test('新版に bun.lock が無ければ upstream から取り除き plugin のものは残す', () => {
   seed(SAME)
   write(upstreamDir, 'bun.lock', 'old lock\n')
+  write(pluginDir, 'bun.lock', 'plugin lock\n')
 
   mergeUpstream({ repoRoot, newDir, run: cleanRun })
 
   expect(existsSync(join(upstreamDir, 'bun.lock'))).toBe(false)
+  expect(read(pluginDir, 'bun.lock')).toBe('plugin lock\n')
 })
 
 test('plugin に無い追跡対象は新版をそのまま写す', () => {
@@ -225,6 +254,9 @@ test('compareDirs は片方にしか無い追跡対象も changed に挙げる',
 test('git merge-file がエラーを返したら例外を投げ plugin と upstream と upstream.json を変えない', () => {
   seed({ base: 'a\n', plugin: 'a\n', next: 'a2\n' })
   write(pluginDir, 'upstream.json', '{"version":"0.0.5"}')
+  write(upstreamDir, 'bun.lock', 'old lock\n')
+  write(pluginDir, 'bun.lock', 'old lock\n')
+  write(newDir, 'bun.lock', 'new lock\n')
   const before = snapshot(repoRoot)
   let count = 0
   const run: MergeRunner = () => {

@@ -1,9 +1,9 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test'
-import { writeRoute, readRoute, deleteRoute, routesDir, stateDir } from '../src/routes'
+import { writeRoute, readRoute, deleteRoute, routesDir } from '../src/routes'
 import { rmSync, existsSync, readdirSync } from 'fs'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
-import { tmpdir, homedir } from 'os'
+import { tmpdir } from 'os'
 
 // テスト用の一時ディレクトリを設定して 本番 routes を保護する
 const testTmpDir = join(tmpdir(), `discord-routes-test-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`)
@@ -69,16 +69,6 @@ test('deleteRoute は route が無くても成功として扱う', () => {
 
 test('deleteRoute は不正な名前では削除しない', () => {
   expect(deleteRoute('../escape')).toBe(false)
-})
-
-test('stateDir は DISCORD_STATE_DIR 未設定時に homedir/.claude/channels/discord を返す', () => {
-  const savedEnv = process.env.DISCORD_STATE_DIR
-  try {
-    delete process.env.DISCORD_STATE_DIR
-    expect(stateDir()).toBe(join(homedir(), '.claude', 'channels', 'discord'))
-  } finally {
-    process.env.DISCORD_STATE_DIR = savedEnv
-  }
 })
 
 test('writeRoute は一時ファイルを残さない', () => {

@@ -21,7 +21,6 @@ import { createOwnerResolver } from './owner-resolver'
 import { deleteTarget, writeProgressBody, writeTarget } from './progress-target'
 import { createWriter, readJsonLines, type Json, type Writer } from './relay'
 import { handleEditMessage, handleReply } from './reply'
-import { stateDir } from './routes'
 import {
   classifyInbound,
   decideDelivery,
@@ -31,6 +30,7 @@ import {
   type OwnerContext,
 } from './routing'
 import { archiveStaleThreads } from './stale-threads'
+import { stateDir } from './state-dir'
 import { currentUsage } from './usage'
 
 // cc-discord 透過プロキシ ---

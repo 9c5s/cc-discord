@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { stateDir } from './routes'
 import { isThread, type ChannelEntity } from './routing'
+import { stateDir } from './state-dir'
 
 // access.json の読み取り ---
 // 公式 server と同じファイルを読むが 書き込みと退避 (.corrupt-<ts>) は公式の役割であり proxy は行わない

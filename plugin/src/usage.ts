@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
-import { stateDir } from './routes'
+import { stateDir } from './state-dir'
 
 // 5h と 7d とモデル別週次枠 (Fable 等) の取得とキャッシュを担うモジュール
 // statusline の stdin JSON にはモデル別の枠が含まれないため使用量 API から直接取る

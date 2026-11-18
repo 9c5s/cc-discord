@@ -3,8 +3,8 @@ import { basename, join, sep } from 'path'
 import { isAllowedTarget, type Access } from './access'
 import type { DiscordClient, OutFile } from './discord-api'
 import { isSnowflake } from './ids'
-import { stateDir } from './routes'
 import { decideOutbound, type OwnerContext } from './routing'
+import { stateDir } from './state-dir'
 
 // reply / edit_message の take over ---
 // 公式 0.0.4 の意味論 (引数 chunk outbound gate assertSendable) を移植する

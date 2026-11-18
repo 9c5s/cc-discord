@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { isHex32, isOwnerName, isSessionId, isSnowflake, resolveInDir } from './ids'
-import { stateDir } from './routes'
+import { stateDir } from './state-dir'
 
 // 進捗の宛先ファイル ---
 // 本体 (progress-thread/<owner>) は素の id 1 行で 旧 notify と旧 archive のためだけに書く

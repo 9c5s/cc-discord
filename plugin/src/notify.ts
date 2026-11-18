@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { readFileSync, existsSync, mkdirSync, appendFileSync } from 'fs'
 import { ownerContext } from './routing'
-import { stateDir } from './routes'
+import { stateDir } from './state-dir'
 
 // 担当名と認証情報とログの共通ユーティリティ ---
 // proxy / hook / watcher が共用する

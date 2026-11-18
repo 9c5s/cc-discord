@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { isHex32, isPid, isSessionId, resolveInDir } from './ids'
-import { stateDir } from './routes'
+import { stateDir } from './state-dir'
 
 // 現行 activation のポインタと heartbeat ---
 // activation とは 1 回の SessionStart (startup / resume / clear / fork) で始まる期間である

@@ -85,7 +85,6 @@ export function splitLines(carry: string, chunk: string): { lines: string[]; car
 
 // 起動引数 ---
 // watcher は activation 単位で起動されるため 5 つの識別子をすべて必須にする
-// 旧 global hook の watch.ts <transcript_path> だけの起動はここで無効化される
 
 export type WatchArgs = {
   transcriptPath: string

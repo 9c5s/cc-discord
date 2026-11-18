@@ -18,6 +18,26 @@ test('splitCommandLine は空の二重引用符を空文字の引数として残
   expect(splitCommandLine('a "" b')).toEqual(['a', '', 'b'])
 })
 
+test('splitCommandLine はエスケープした引用符を含む引数を 1 つの引数に保つ', () => {
+  expect(splitCommandLine('claude "say \\"x\\" --channels plugin:cc-discord@y"')).toEqual(['claude', 'say "x" --channels plugin:cc-discord@y'])
+})
+
+test('splitCommandLine は閉じる引用符の直前の 2 個のバックスラッシュを 1 個にして引用を閉じる', () => {
+  expect(splitCommandLine('"C:\\a b\\\\" next')).toEqual(['C:\\a b\\', 'next'])
+})
+
+test('splitCommandLine は奇数個のバックスラッシュの後の引用符をリテラルにする', () => {
+  expect(splitCommandLine('a\\\\\\"b')).toEqual(['a\\"b'])
+})
+
+test('splitCommandLine は引用の外のバックスラッシュをそのまま残す', () => {
+  expect(splitCommandLine('C:\\x\\y')).toEqual(['C:\\x\\y'])
+})
+
+test('splitCommandLine は引用の中の連続する二重引用符をリテラルの引用符 1 文字にする', () => {
+  expect(splitCommandLine('"a ""b"" c" d')).toEqual(['a "b" c', 'd'])
+})
+
 test('parseProcStat は括弧と空白を含むコマンド名を越えて ppid と starttime を読む', () => {
   const text = '123 (my (odd) cmd) S 45 ' + Array(17).fill('0').join(' ') + ' 98765 0 0'
   expect(parseProcStat(text)).toEqual({ ppid: 45, startTicks: 98765 })

@@ -6,7 +6,7 @@ import { createTailReader, extractMessages, packMessages, type TailReader } from
 
 // 宛先の有効期間
 export const TARGET_TTL_MS = 12 * 60 * 60 * 1000
-// 429 の待ちに付き合う上限
+// 429 の待ち時間として許容する上限
 export const MAX_RETRY_WAIT_MS = 10_000
 // 1 チャンクあたりの送信の回数 (429 で 1 度だけ待って送り直す)
 const MAX_SEND_ATTEMPTS = 2

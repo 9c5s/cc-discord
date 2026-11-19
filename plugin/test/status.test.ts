@@ -23,7 +23,7 @@ const fullData = {
 
 test('buildStatusBlock は branch/model+effort/ctx+5h+7d の3行コードブロックを作る', () => {
   expect(buildStatusBlock(fullData, 'feat/channel-enhancements')).toBe(
-    '```\n🌿 feat/channel-enhancements\n👾 Fable 5 | 🧠 max\n📊 14% | ⏰ 63% 10:10\n📅 16% 6/14 3:00\n```',
+    '```\n🌿 feat/channel-enhancements\n👾 Fable 5 max\n📊 14% | ⏰ 63% 10:10\n📅 16% 6/14 3:00\n```',
   )
 })
 
@@ -65,7 +65,7 @@ test('buildStatusBlock は末尾でない " context)" は置換しない (誤置
 
 test('buildStatusBlock は notice をコードブロックの最終行に足す', () => {
   expect(buildStatusBlock(fullData, 'main', '', 'upstream 0.0.6')).toBe(
-    '```\n🌿 main\n👾 Fable 5 | 🧠 max\n📊 14% | ⏰ 63% 10:10\n📅 16% 6/14 3:00\n⬆️ upstream 0.0.6\n```',
+    '```\n🌿 main\n👾 Fable 5 max\n📊 14% | ⏰ 63% 10:10\n📅 16% 6/14 3:00\n⬆️ upstream 0.0.6\n```',
   )
 })
 
@@ -117,13 +117,13 @@ test('readBranch は .git が無ければ null を返す', () => {
 
 test('buildStatusBlock は 7d の利用率直後にモデル別枠を併記する', () => {
   expect(buildStatusBlock(fullData, null, '(88%)')).toBe(
-    '```\n👾 Fable 5 | 🧠 max\n📊 14% | ⏰ 63% 10:10\n📅 16%(88%) 6/14 3:00\n```',
+    '```\n👾 Fable 5 max\n📊 14% | ⏰ 63% 10:10\n📅 16%(88%) 6/14 3:00\n```',
   )
 })
 
 test('buildStatusBlock はモデル別枠が空なら括弧を出さない', () => {
   expect(buildStatusBlock(fullData, null)).toBe(
-    '```\n👾 Fable 5 | 🧠 max\n📊 14% | ⏰ 63% 10:10\n📅 16% 6/14 3:00\n```',
+    '```\n👾 Fable 5 max\n📊 14% | ⏰ 63% 10:10\n📅 16% 6/14 3:00\n```',
   )
 })
 

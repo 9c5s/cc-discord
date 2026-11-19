@@ -143,7 +143,7 @@ test('buildFooter はモデルと ctx と 5h と 7d を含むブロックを作�
   const ownerDir = join(testTmpDir, 'proj')
   const p = tmpFile('t.jsonl', `${assistantLine()}\n`)
   const footer = buildFooter({ transcriptPath: p, ownerDir, usage: USAGE })
-  expect(footer).toContain('👾 Opus 5 | 🧠 high')
+  expect(footer).toContain('👾 Opus 5 high')
   // 1000 / 1_000_000 = 0.1% -> 切り捨てて 0%
   expect(footer).toContain('📊 0%')
   expect(footer).toContain('⏰ 63%')
@@ -175,7 +175,7 @@ test('buildFooter は effort が transcript に無ければ CLAUDE_EFFORT を使
   const ownerDir = join(testTmpDir, 'proj')
   process.env.CLAUDE_EFFORT = 'medium'
   const p = tmpFile('t.jsonl', `${assistantLine({ effort: undefined })}\n`)
-  expect(buildFooter({ transcriptPath: p, ownerDir, usage: USAGE })).toContain('🧠 medium')
+  expect(buildFooter({ transcriptPath: p, ownerDir, usage: USAGE })).toContain('👾 Opus 5 medium')
 })
 
 test('buildFooter は使用量が無く transcript も無ければ空文字を返す', () => {
